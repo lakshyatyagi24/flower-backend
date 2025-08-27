@@ -3,9 +3,14 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  // Allow the frontend (localhost:3000) to call this API during development
+  // Allow the frontend (localhost:3000) and admin panel (localhost:3002) to call this API during development
   app.enableCors({
-    origin: [process.env.CORS_ORIGIN ?? 'http://localhost:3000', 'http://127.0.0.1:3000'],
+    origin: [
+      process.env.CORS_ORIGIN ?? 'http://localhost:3000',
+      'http://127.0.0.1:3000',
+      'http://localhost:3002',
+      'http://127.0.0.1:3002',
+    ],
     credentials: true,
   });
   await app.listen(process.env.PORT ?? 3001);
