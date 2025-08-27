@@ -6,7 +6,12 @@ import {
   Delete,
   Body,
   Param,
+  Query,
+  BadRequestException,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { EcommerceService } from './ecommerce.service';
 
 @Controller()
@@ -50,7 +55,68 @@ export class EcommerceController {
 
   // GET /sliders -> homepage sliders
   @Get('sliders')
-  async getSliders() {
-    return this.ecommerceService.getSliders();
+  async getSliders(@Query('includeInactive') includeInactive?: string) {
+    return this.ecommerceService.getSliders(includeInactive === 'true');
+  }
+
+  // GET /sliders/:id -> get single slider
+  @Get('sliders/:id')
+  async getSlider(@Param('id') id: string) {
+    const sliderId = parseInt(id);
+    if (isNaN(sliderId)) {
+      throw new BadRequestException('Invalid slider ID');
+    }
+    return this.ecommerceService.getSlider(sliderId);
+  }
+
+  // POST /sliders -> create new slider
+  @Post('sliders')
+  async createSlider(
+    @Body() data: {
+      title?: string;
+      eyebrow?: string;
+      subtitle?: string;
+      alt?: string;
+      image?: string;
+      href?: string;
+      config?: any;
+      sortOrder?: number;
+      active?: boolean;
+    },
+  ) {
+    return this.ecommerceService.createSlider(data);
+  }
+
+  // PUT /sliders/:id -> update slider
+  @Put('sliders/:id')
+  async updateSlider(
+    @Param('id') id: string,
+    @Body() data: {
+      title?: string;
+      eyebrow?: string;
+      subtitle?: string;
+      alt?: string;
+      image?: string;
+      href?: string;
+      config?: any;
+      sortOrder?: number;
+      active?: boolean;
+    },
+  ) {
+    const sliderId = parseInt(id);
+    if (isNaN(sliderId)) {
+      throw new BadRequestException('Invalid slider ID');
+    }
+    return this.ecommerceService.updateSlider(sliderId, data);
+  }
+
+  // DELETE /sliders/:id -> delete slider
+  @Delete('sliders/:id')
+  async deleteSlider(@Param('id') id: string) {
+    const sliderId = parseInt(id);
+    if (isNaN(sliderId)) {
+      throw new BadRequestException('Invalid slider ID');
+    }
+    return this.ecommerceService.deleteSlider(sliderId);
   }
 }
