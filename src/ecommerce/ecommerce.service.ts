@@ -50,31 +50,45 @@ export class EcommerceService {
       }
     }
 
-    return this.prisma.category.create({
-      data,
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        image: true,
-        parentId: true,
-      },
-    });
+    try {
+      return await this.prisma.category.create({
+        data,
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          image: true,
+          parentId: true,
+        },
+      });
+    } catch (error: any) {
+      if (error.code === 'P2002' && error.meta?.target?.includes('slug')) {
+        throw new BadRequestException('A category with this slug already exists. Please choose a different slug.');
+      }
+      throw error;
+    }
   }
 
   // Update an existing category
   async updateCategory(id: number, data: { name?: string; slug?: string; image?: string }) {
-    return this.prisma.category.update({
-      where: { id },
-      data,
-      select: {
-        id: true,
-        name: true,
-        slug: true,
-        image: true,
-        parentId: true,
-      },
-    });
+    try {
+      return await this.prisma.category.update({
+        where: { id },
+        data,
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          image: true,
+          parentId: true,
+        },
+      });
+    } catch (error: any) {
+      if (error.code === 'P2002' && error.meta?.target?.includes('slug')) {
+        throw new BadRequestException('A category with this slug already exists. Please choose a different slug.');
+      }
+      throw error;
+    }
   }
 
   // Delete a category
