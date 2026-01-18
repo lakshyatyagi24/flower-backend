@@ -126,7 +126,7 @@ export class EcommerceService {
 
   // Return sliders with optional inactive inclusion
   async getSliders(includeInactive: boolean = false) {
-    return this.prisma.slider.findMany({
+    const sliders = await this.prisma.slider.findMany({
       where: includeInactive ? {} : { active: true },
       orderBy: { sortOrder: 'asc' },
       select: {
@@ -142,6 +142,17 @@ export class EcommerceService {
         active: true,
       },
     });
+
+    console.log(
+      'Returning sliders:',
+      JSON.stringify(
+        sliders.map((s) => ({ id: s.id, config: s.config })),
+        null,
+        2,
+      ),
+    );
+
+    return sliders;
   }
 
   // Get single slider by ID
@@ -293,7 +304,7 @@ export class EcommerceService {
           alt: data.alt !== undefined ? data.alt : existingSlider.alt,
           image: data.image !== undefined ? data.image : existingSlider.image,
           href: data.href !== undefined ? data.href : existingSlider.href,
-          config: data.config !== undefined ? data.config : existingSlider.config,
+          config: data.config !== undefined ? { ...existingSlider.config, ...data.config } : existingSlider.config,
           sortOrder: data.sortOrder !== undefined ? data.sortOrder : existingSlider.sortOrder,
           active: data.active !== undefined ? data.active : existingSlider.active,
         },
