@@ -219,7 +219,7 @@ const config = {
       "value": "prisma-client-js"
     },
     "output": {
-      "value": "C:\\Users\\laksh\\OneDrive\\Desktop\\Projects\\flower-ecommerce-platform\\flower-backend\\prisma\\generated\\prisma",
+      "value": "C:\\Users\\laksh\\OneDrive\\Desktop\\Projects\\Flower Project\\flower-backend\\prisma\\generated\\prisma",
       "fromEnvVar": null
     },
     "config": {
@@ -233,12 +233,11 @@ const config = {
       }
     ],
     "previewFeatures": [],
-    "sourceFilePath": "C:\\Users\\laksh\\OneDrive\\Desktop\\Projects\\flower-ecommerce-platform\\flower-backend\\prisma\\schema.prisma",
+    "sourceFilePath": "C:\\Users\\laksh\\OneDrive\\Desktop\\Projects\\Flower Project\\flower-backend\\prisma\\schema.prisma",
     "isCustomOutput": true
   },
   "relativeEnvPaths": {
-    "rootEnvPath": null,
-    "schemaEnvPath": "../../../.env"
+    "rootEnvPath": null
   },
   "relativePath": "../..",
   "clientVersion": "6.14.0",
