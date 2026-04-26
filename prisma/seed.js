@@ -72,7 +72,7 @@ async function main() {
       stock: 20,
       featured: true,
       image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/blue-gardenia.jpg',
+        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/BlueGardenia2.jpg?v=1623742081',
       categoryId: bouquets?.id ?? null,
     },
     {
@@ -84,7 +84,7 @@ async function main() {
       stock: 15,
       featured: true,
       image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/blush-of-affection.jpg',
+        'https://cdn.shopify.com/s/files/1/0047/4637/9362/files/IMG_5243.jpg?v=1706862106',
       categoryId: bouquets?.id ?? null,
     },
     {
@@ -96,7 +96,7 @@ async function main() {
       stock: 25,
       featured: false,
       image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/flourishing-opulence.jpg',
+        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/THEFLORAB2_3.jpg?v=1604313892',
       categoryId: bouquets?.id ?? null,
     },
     {
@@ -108,7 +108,7 @@ async function main() {
       stock: 18,
       featured: true,
       image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/a-riot-of-colours.jpg',
+        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/TheFlora_AllTheColors_2.jpg?v=1665732723',
       categoryId: bouquets?.id ?? null,
     },
     {
@@ -120,19 +120,19 @@ async function main() {
       stock: 20,
       featured: false,
       image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/a-pocketful-of-sunshine.jpg',
+        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/WES_8950.jpg?v=1619006766',
       categoryId: arrangements?.id ?? null,
     },
     {
       slug: 'brand-new-day',
       name: 'Brand New Day',
       description:
-        'A fresh, modern floral basket in soft seasonal colours with a welcoming, relaxed aesthetic. Perfect for new beginnings — new home, new job, new arrival — or simply to brighten someone\'s day.',
+        'A fresh, modern floral arrangement in soft seasonal colours with a welcoming, relaxed aesthetic. Perfect for new beginnings — new home, new job, new arrival — or simply to brighten someone\'s day.',
       price: 1750,
       stock: 22,
       featured: false,
       image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/brand-new-day.jpg',
+        'https://cdn.shopify.com/s/files/1/0047/4637/9362/files/IMG_4685_caa6b990-fdb2-4a4b-9929-cd3b21cb0085.jpg?v=1705148238',
       categoryId: arrangements?.id ?? null,
     },
     {
@@ -144,7 +144,7 @@ async function main() {
       stock: 10,
       featured: true,
       image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/celebration-hamper.jpg',
+        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/a0e57ed4-4638-4eb9-948f-ad139bb042d5.jpg?v=1660194809',
       categoryId: hampers?.id ?? null,
     },
     {
@@ -156,7 +156,7 @@ async function main() {
       stock: 12,
       featured: true,
       image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/orchid-grace.jpg',
+        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/IMG_6120a.jpg?v=1682145070',
       categoryId: plants?.id ?? null,
     },
   ];
