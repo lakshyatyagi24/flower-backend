@@ -215,10 +215,10 @@ async function main() {
   console.log(`Seeded ${cutFlowers.count} cut-flower products under category '${cutFlowers.category.slug}'`);
 
   const defaultSettings = {
-    'store.name': 'Magnolia Lane Florals',
-    'store.email': 'hello@magnolialane.local',
-    'store.phone': '+91 99999 11111',
-    'store.address': '123 Flower Street, Mumbai',
+    'store.name': 'Fresh Petals India',
+    'store.email': 'care@freshpetalsindia.com',
+    'store.phone': '+91 99000 99000',
+    'store.address': 'India-wide delivery',
     'shipping.flatRate': '99',
     'shipping.freeThreshold': '1499',
   };
