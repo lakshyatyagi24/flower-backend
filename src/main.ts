@@ -9,13 +9,20 @@ async function bootstrap() {
   app.use(json({ limit: '10mb' }));
   app.use(urlencoded({ limit: '10mb', extended: true }));
 
-  // Allow the frontend (localhost:3000) and admin panel (localhost:3002) to call this API during development
+  const extraOrigins = (process.env.CORS_ORIGINS ?? process.env.CORS_ORIGIN ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+
   app.enableCors({
     origin: [
-      process.env.CORS_ORIGIN ?? 'http://localhost:3000',
+      'http://localhost:3000',
       'http://127.0.0.1:3000',
       'http://localhost:3002',
       'http://127.0.0.1:3002',
+      'https://freshpetalsindia.com',
+      'https://www.freshpetalsindia.com',
+      ...extraOrigins,
     ],
     credentials: true,
   });
