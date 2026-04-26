@@ -103,7 +103,7 @@ export class EcommerceService {
     });
 
     if (!category) {
-      throw new BadRequestException('Category not found');
+      throw new NotFoundException('Category not found');
     }
 
     if (category.children.length > 0) {
@@ -126,7 +126,7 @@ export class EcommerceService {
 
   // Return sliders with optional inactive inclusion
   async getSliders(includeInactive: boolean = false) {
-    const sliders = await this.prisma.slider.findMany({
+    return this.prisma.slider.findMany({
       where: includeInactive ? {} : { active: true },
       orderBy: { sortOrder: 'asc' },
       select: {
@@ -142,17 +142,6 @@ export class EcommerceService {
         active: true,
       },
     });
-
-    console.log(
-      'Returning sliders:',
-      JSON.stringify(
-        sliders.map((s) => ({ id: s.id, config: s.config })),
-        null,
-        2,
-      ),
-    );
-
-    return sliders;
   }
 
   // Get single slider by ID

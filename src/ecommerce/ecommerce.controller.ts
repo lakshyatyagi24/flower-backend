@@ -8,29 +8,30 @@ import {
   Param,
   Query,
   BadRequestException,
-  UploadedFile,
-  UseInterceptors,
+  UseGuards,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
 import { EcommerceService } from './ecommerce.service';
+import { JwtAuthGuard, Roles } from '../auth/auth.guard';
 
 @Controller()
 export class EcommerceController {
   constructor(private readonly ecommerceService: EcommerceService) {}
 
-  // GET /categories -> top-level categories
+  // GET /categories -> top-level categories (public)
   @Get('categories')
   async findAll() {
     return this.ecommerceService.getCategories();
   }
 
-  // GET /categories/all -> all categories with hierarchy
+  // GET /categories/all -> all categories with hierarchy (public)
   @Get('categories/all')
   async findAllWithHierarchy() {
     return this.ecommerceService.getAllCategories();
   }
 
-  // POST /categories -> create new category
+  // POST /categories -> create new category (admin)
+  @UseGuards(JwtAuthGuard)
+  @Roles('ADMIN')
   @Post('categories')
   async createCategory(
     @Body() data: { name: string; slug: string; image?: string; parentId?: number },
@@ -38,7 +39,9 @@ export class EcommerceController {
     return this.ecommerceService.createCategory(data);
   }
 
-  // PUT /categories/:id -> update category
+  // PUT /categories/:id -> update category (admin)
+  @UseGuards(JwtAuthGuard)
+  @Roles('ADMIN')
   @Put('categories/:id')
   async updateCategory(
     @Param('id') id: string,
@@ -47,7 +50,9 @@ export class EcommerceController {
     return this.ecommerceService.updateCategory(parseInt(id), data);
   }
 
-  // DELETE /categories/:id -> delete category
+  // DELETE /categories/:id -> delete category (admin)
+  @UseGuards(JwtAuthGuard)
+  @Roles('ADMIN')
   @Delete('categories/:id')
   async deleteCategory(@Param('id') id: string) {
     return this.ecommerceService.deleteCategory(parseInt(id));
@@ -69,7 +74,9 @@ export class EcommerceController {
     return this.ecommerceService.getSlider(sliderId);
   }
 
-  // POST /sliders -> create new slider
+  // POST /sliders -> create new slider (admin)
+  @UseGuards(JwtAuthGuard)
+  @Roles('ADMIN')
   @Post('sliders')
   async createSlider(
     @Body() data: {
@@ -87,7 +94,9 @@ export class EcommerceController {
     return this.ecommerceService.createSlider(data);
   }
 
-  // PUT /sliders/:id -> update slider
+  // PUT /sliders/:id -> update slider (admin)
+  @UseGuards(JwtAuthGuard)
+  @Roles('ADMIN')
   @Put('sliders/:id')
   async updateSlider(
     @Param('id') id: string,
@@ -110,7 +119,9 @@ export class EcommerceController {
     return this.ecommerceService.updateSlider(sliderId, data);
   }
 
-  // DELETE /sliders/:id -> delete slider
+  // DELETE /sliders/:id -> delete slider (admin)
+  @UseGuards(JwtAuthGuard)
+  @Roles('ADMIN')
   @Delete('sliders/:id')
   async deleteSlider(@Param('id') id: string) {
     const sliderId = parseInt(id);
