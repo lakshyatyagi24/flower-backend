@@ -144,14 +144,52 @@ function smallestVariantByOption(variants, optionIndex) {
   return out;
 }
 
+function normalizeImageUrl(input) {
+  if (!input) return null;
+  let value = String(input).trim();
+  if (!value) return null;
+
+  value = value.replace(/\\\//g, '/');
+
+  for (let i = 0; i < 2; i += 1) {
+    if (!/%[0-9A-Fa-f]{2}/.test(value)) break;
+    try {
+      value = decodeURIComponent(value);
+    } catch {
+      break;
+    }
+  }
+
+  value = value
+    .replace(/^https::\/\//i, 'https://')
+    .replace(/^http::\/\//i, 'http://')
+    .replace(/^https:\/([^/])/i, 'https://$1')
+    .replace(/^http:\/([^/])/i, 'http://$1');
+
+  if (value.startsWith('//')) {
+    value = `https:${value}`;
+  }
+
+  if (/^cdn\.shopify\.com\//i.test(value)) {
+    value = `https://${value}`;
+  }
+
+  if (/^http:\/\/cdn\.shopify\.com/i.test(value)) {
+    value = value.replace(/^http:\/\//i, 'https://');
+  }
+
+  if (!/^https?:\/\//i.test(value)) return null;
+  return value;
+}
+
 function pickImageSrc(product, variant) {
+  let src = null;
   if (variant && variant.featured_image && variant.featured_image.src) {
-    return variant.featured_image.src;
+    src = variant.featured_image.src;
+  } else if (Array.isArray(product.images) && product.images[0] && product.images[0].src) {
+    src = product.images[0].src;
   }
-  if (Array.isArray(product.images) && product.images[0] && product.images[0].src) {
-    return product.images[0].src;
-  }
-  return null;
+  return normalizeImageUrl(src);
 }
 
 function productNameWithColor(productTitle, color) {

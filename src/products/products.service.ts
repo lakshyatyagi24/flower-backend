@@ -30,6 +30,36 @@ function slugify(input: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+function normalizeImageUrl(input?: string | null): string | null {
+  if (!input) return null;
+  let value = String(input).trim();
+  if (!value) return null;
+
+  value = value.replace(/\\\//g, '/');
+
+  for (let i = 0; i < 2; i += 1) {
+    if (!/%[0-9A-Fa-f]{2}/.test(value)) break;
+    try {
+      value = decodeURIComponent(value);
+    } catch {
+      break;
+    }
+  }
+
+  value = value
+    .replace(/^https::\/\//i, 'https://')
+    .replace(/^http::\/\//i, 'http://')
+    .replace(/^https:\/([^/])/i, 'https://$1')
+    .replace(/^http:\/([^/])/i, 'http://$1');
+
+  if (value.startsWith('//')) value = `https:${value}`;
+  if (/^cdn\.shopify\.com\//i.test(value)) value = `https://${value}`;
+  if (/^http:\/\/cdn\.shopify\.com/i.test(value)) value = value.replace(/^http:\/\//i, 'https://');
+
+  if (!/^https?:\/\//i.test(value)) return null;
+  return value;
+}
+
 @Injectable()
 export class ProductsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -112,20 +142,24 @@ export class ProductsService {
       }),
       this.prisma.product.count({ where }),
     ]);
-    const items = await this.attachRatings(rawItems);
+    const sanitizedItems = rawItems.map((item) => ({
+      ...item,
+      image: normalizeImageUrl(item.image),
+    }));
+    const items = await this.attachRatings(sanitizedItems);
     return { items, total, take, skip };
   }
 
   async getBySlug(slug: string) {
     const product = await this.prisma.product.findUnique({ where: { slug }, select: this.select });
     if (!product) throw new NotFoundException('Product not found');
-    return this.attachRating(product);
+    return this.attachRating({ ...product, image: normalizeImageUrl(product.image) });
   }
 
   async getById(id: number) {
     const product = await this.prisma.product.findUnique({ where: { id }, select: this.select });
     if (!product) throw new NotFoundException('Product not found');
-    return this.attachRating(product);
+    return this.attachRating({ ...product, image: normalizeImageUrl(product.image) });
   }
 
   async create(input: ProductInput) {
@@ -140,7 +174,7 @@ export class ProductsService {
           slug,
           description: input.description ?? null,
           price: input.price,
-          image: input.image ?? null,
+          image: normalizeImageUrl(input.image ?? null),
           stock: input.stock ?? 0,
           featured: input.featured ?? false,
           active: input.active ?? true,
@@ -167,7 +201,7 @@ export class ProductsService {
       if (typeof input.price !== 'number' || input.price < 0) throw new BadRequestException('Invalid price');
       data.price = input.price;
     }
-    if (input.image !== undefined) data.image = input.image;
+    if (input.image !== undefined) data.image = normalizeImageUrl(input.image);
     if (input.stock !== undefined) data.stock = Math.max(0, Math.floor(input.stock));
     if (input.featured !== undefined) data.featured = !!input.featured;
     if (input.active !== undefined) data.active = !!input.active;
