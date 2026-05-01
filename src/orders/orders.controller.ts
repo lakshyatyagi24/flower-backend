@@ -101,4 +101,28 @@ export class OrdersController {
     if (isNaN(numeric)) throw new BadRequestException('Invalid order ID');
     return this.orders.updateStatus(numeric, body.status);
   }
+
+  // Generic admin patch endpoint. Used to update tracking, courier, admin notes
+  // and editable customer/address fields without forcing the whole order through.
+  @UseGuards(JwtAuthGuard)
+  @Roles('ADMIN')
+  @Put(':id')
+  async adminUpdate(
+    @Param('id') id: string,
+    @Body()
+    body: {
+      status?: string;
+      trackingNumber?: string | null;
+      courierName?: string | null;
+      adminNotes?: string | null;
+      shippingAddress?: string | null;
+      city?: string | null;
+      postalCode?: string | null;
+      customerPhone?: string | null;
+    },
+  ) {
+    const numeric = parseInt(id, 10);
+    if (isNaN(numeric)) throw new BadRequestException('Invalid order ID');
+    return this.orders.adminUpdate(numeric, body);
+  }
 }

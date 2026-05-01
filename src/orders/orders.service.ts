@@ -220,6 +220,48 @@ export class OrdersService {
     });
   }
 
+  /**
+   * Generic admin-only update for fulfillment fields. Each field is optional so
+   * admins can edit a tracking number without re-supplying everything else.
+   */
+  async adminUpdate(
+    id: number,
+    patch: {
+      status?: string;
+      trackingNumber?: string | null;
+      courierName?: string | null;
+      adminNotes?: string | null;
+      shippingAddress?: string | null;
+      city?: string | null;
+      postalCode?: string | null;
+      customerPhone?: string | null;
+    },
+  ) {
+    const existing = await this.prisma.order.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Order not found');
+
+    const data: Record<string, unknown> = {};
+    if (patch.status !== undefined) {
+      if (!(ALLOWED_STATUSES as readonly string[]).includes(patch.status)) {
+        throw new BadRequestException('Invalid status');
+      }
+      data.status = patch.status as OrderStatus;
+    }
+    if (patch.trackingNumber !== undefined) data.trackingNumber = patch.trackingNumber || null;
+    if (patch.courierName !== undefined) data.courierName = patch.courierName || null;
+    if (patch.adminNotes !== undefined) data.adminNotes = patch.adminNotes || null;
+    if (patch.shippingAddress !== undefined) data.shippingAddress = patch.shippingAddress || null;
+    if (patch.city !== undefined) data.city = patch.city || null;
+    if (patch.postalCode !== undefined) data.postalCode = patch.postalCode || null;
+    if (patch.customerPhone !== undefined) data.customerPhone = patch.customerPhone || null;
+
+    return this.prisma.order.update({
+      where: { id },
+      data,
+      include: this.include,
+    });
+  }
+
   async stats() {
     const [orderCount, productCount, customerCount, totalAgg, recentOrders, openEnquiries] = await Promise.all([
       this.prisma.order.count(),

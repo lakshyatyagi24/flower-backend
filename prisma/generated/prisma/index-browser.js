@@ -180,6 +180,9 @@ exports.Prisma.OrderScalarFieldEnum = {
   city: 'city',
   postalCode: 'postalCode',
   notes: 'notes',
+  trackingNumber: 'trackingNumber',
+  courierName: 'courierName',
+  adminNotes: 'adminNotes',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 };

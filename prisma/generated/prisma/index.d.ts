@@ -5868,6 +5868,9 @@ export namespace Prisma {
     city: string | null
     postalCode: string | null
     notes: string | null
+    trackingNumber: string | null
+    courierName: string | null
+    adminNotes: string | null
     createdAt: Date | null
     updatedAt: Date | null
   }
@@ -5888,6 +5891,9 @@ export namespace Prisma {
     city: string | null
     postalCode: string | null
     notes: string | null
+    trackingNumber: string | null
+    courierName: string | null
+    adminNotes: string | null
     createdAt: Date | null
     updatedAt: Date | null
   }
@@ -5908,6 +5914,9 @@ export namespace Prisma {
     city: number
     postalCode: number
     notes: number
+    trackingNumber: number
+    courierName: number
+    adminNotes: number
     createdAt: number
     updatedAt: number
     _all: number
@@ -5948,6 +5957,9 @@ export namespace Prisma {
     city?: true
     postalCode?: true
     notes?: true
+    trackingNumber?: true
+    courierName?: true
+    adminNotes?: true
     createdAt?: true
     updatedAt?: true
   }
@@ -5968,6 +5980,9 @@ export namespace Prisma {
     city?: true
     postalCode?: true
     notes?: true
+    trackingNumber?: true
+    courierName?: true
+    adminNotes?: true
     createdAt?: true
     updatedAt?: true
   }
@@ -5988,6 +6003,9 @@ export namespace Prisma {
     city?: true
     postalCode?: true
     notes?: true
+    trackingNumber?: true
+    courierName?: true
+    adminNotes?: true
     createdAt?: true
     updatedAt?: true
     _all?: true
@@ -6095,6 +6113,9 @@ export namespace Prisma {
     city: string | null
     postalCode: string | null
     notes: string | null
+    trackingNumber: string | null
+    courierName: string | null
+    adminNotes: string | null
     createdAt: Date
     updatedAt: Date
     _count: OrderCountAggregateOutputType | null
@@ -6134,6 +6155,9 @@ export namespace Prisma {
     city?: boolean
     postalCode?: boolean
     notes?: boolean
+    trackingNumber?: boolean
+    courierName?: boolean
+    adminNotes?: boolean
     createdAt?: boolean
     updatedAt?: boolean
     user?: boolean | Order$userArgs<ExtArgs>
@@ -6157,6 +6181,9 @@ export namespace Prisma {
     city?: boolean
     postalCode?: boolean
     notes?: boolean
+    trackingNumber?: boolean
+    courierName?: boolean
+    adminNotes?: boolean
     createdAt?: boolean
     updatedAt?: boolean
     user?: boolean | Order$userArgs<ExtArgs>
@@ -6178,6 +6205,9 @@ export namespace Prisma {
     city?: boolean
     postalCode?: boolean
     notes?: boolean
+    trackingNumber?: boolean
+    courierName?: boolean
+    adminNotes?: boolean
     createdAt?: boolean
     updatedAt?: boolean
     user?: boolean | Order$userArgs<ExtArgs>
@@ -6199,11 +6229,14 @@ export namespace Prisma {
     city?: boolean
     postalCode?: boolean
     notes?: boolean
+    trackingNumber?: boolean
+    courierName?: boolean
+    adminNotes?: boolean
     createdAt?: boolean
     updatedAt?: boolean
   }
 
-  export type OrderOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "userId" | "subtotal" | "shipping" | "gst" | "total" | "status" | "paymentMethod" | "customerName" | "customerEmail" | "customerPhone" | "shippingAddress" | "city" | "postalCode" | "notes" | "createdAt" | "updatedAt", ExtArgs["result"]["order"]>
+  export type OrderOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "userId" | "subtotal" | "shipping" | "gst" | "total" | "status" | "paymentMethod" | "customerName" | "customerEmail" | "customerPhone" | "shippingAddress" | "city" | "postalCode" | "notes" | "trackingNumber" | "courierName" | "adminNotes" | "createdAt" | "updatedAt", ExtArgs["result"]["order"]>
   export type OrderInclude<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     user?: boolean | Order$userArgs<ExtArgs>
     items?: boolean | Order$itemsArgs<ExtArgs>
@@ -6238,6 +6271,9 @@ export namespace Prisma {
       city: string | null
       postalCode: string | null
       notes: string | null
+      trackingNumber: string | null
+      courierName: string | null
+      adminNotes: string | null
       createdAt: Date
       updatedAt: Date
     }, ExtArgs["result"]["order"]>
@@ -6680,6 +6716,9 @@ export namespace Prisma {
     readonly city: FieldRef<"Order", 'String'>
     readonly postalCode: FieldRef<"Order", 'String'>
     readonly notes: FieldRef<"Order", 'String'>
+    readonly trackingNumber: FieldRef<"Order", 'String'>
+    readonly courierName: FieldRef<"Order", 'String'>
+    readonly adminNotes: FieldRef<"Order", 'String'>
     readonly createdAt: FieldRef<"Order", 'DateTime'>
     readonly updatedAt: FieldRef<"Order", 'DateTime'>
   }
@@ -14190,6 +14229,9 @@ export namespace Prisma {
     city: 'city',
     postalCode: 'postalCode',
     notes: 'notes',
+    trackingNumber: 'trackingNumber',
+    courierName: 'courierName',
+    adminNotes: 'adminNotes',
     createdAt: 'createdAt',
     updatedAt: 'updatedAt'
   };
@@ -14817,6 +14859,9 @@ export namespace Prisma {
     city?: StringNullableFilter<"Order"> | string | null
     postalCode?: StringNullableFilter<"Order"> | string | null
     notes?: StringNullableFilter<"Order"> | string | null
+    trackingNumber?: StringNullableFilter<"Order"> | string | null
+    courierName?: StringNullableFilter<"Order"> | string | null
+    adminNotes?: StringNullableFilter<"Order"> | string | null
     createdAt?: DateTimeFilter<"Order"> | Date | string
     updatedAt?: DateTimeFilter<"Order"> | Date | string
     user?: XOR<UserNullableScalarRelationFilter, UserWhereInput> | null
@@ -14839,6 +14884,9 @@ export namespace Prisma {
     city?: SortOrderInput | SortOrder
     postalCode?: SortOrderInput | SortOrder
     notes?: SortOrderInput | SortOrder
+    trackingNumber?: SortOrderInput | SortOrder
+    courierName?: SortOrderInput | SortOrder
+    adminNotes?: SortOrderInput | SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
     user?: UserOrderByWithRelationInput
@@ -14864,6 +14912,9 @@ export namespace Prisma {
     city?: StringNullableFilter<"Order"> | string | null
     postalCode?: StringNullableFilter<"Order"> | string | null
     notes?: StringNullableFilter<"Order"> | string | null
+    trackingNumber?: StringNullableFilter<"Order"> | string | null
+    courierName?: StringNullableFilter<"Order"> | string | null
+    adminNotes?: StringNullableFilter<"Order"> | string | null
     createdAt?: DateTimeFilter<"Order"> | Date | string
     updatedAt?: DateTimeFilter<"Order"> | Date | string
     user?: XOR<UserNullableScalarRelationFilter, UserWhereInput> | null
@@ -14886,6 +14937,9 @@ export namespace Prisma {
     city?: SortOrderInput | SortOrder
     postalCode?: SortOrderInput | SortOrder
     notes?: SortOrderInput | SortOrder
+    trackingNumber?: SortOrderInput | SortOrder
+    courierName?: SortOrderInput | SortOrder
+    adminNotes?: SortOrderInput | SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
     _count?: OrderCountOrderByAggregateInput
@@ -14914,6 +14968,9 @@ export namespace Prisma {
     city?: StringNullableWithAggregatesFilter<"Order"> | string | null
     postalCode?: StringNullableWithAggregatesFilter<"Order"> | string | null
     notes?: StringNullableWithAggregatesFilter<"Order"> | string | null
+    trackingNumber?: StringNullableWithAggregatesFilter<"Order"> | string | null
+    courierName?: StringNullableWithAggregatesFilter<"Order"> | string | null
+    adminNotes?: StringNullableWithAggregatesFilter<"Order"> | string | null
     createdAt?: DateTimeWithAggregatesFilter<"Order"> | Date | string
     updatedAt?: DateTimeWithAggregatesFilter<"Order"> | Date | string
   }
@@ -15753,6 +15810,9 @@ export namespace Prisma {
     city?: string | null
     postalCode?: string | null
     notes?: string | null
+    trackingNumber?: string | null
+    courierName?: string | null
+    adminNotes?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     user?: UserCreateNestedOneWithoutOrdersInput
@@ -15775,6 +15835,9 @@ export namespace Prisma {
     city?: string | null
     postalCode?: string | null
     notes?: string | null
+    trackingNumber?: string | null
+    courierName?: string | null
+    adminNotes?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     items?: OrderItemUncheckedCreateNestedManyWithoutOrderInput
@@ -15794,6 +15857,9 @@ export namespace Prisma {
     city?: NullableStringFieldUpdateOperationsInput | string | null
     postalCode?: NullableStringFieldUpdateOperationsInput | string | null
     notes?: NullableStringFieldUpdateOperationsInput | string | null
+    trackingNumber?: NullableStringFieldUpdateOperationsInput | string | null
+    courierName?: NullableStringFieldUpdateOperationsInput | string | null
+    adminNotes?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     user?: UserUpdateOneWithoutOrdersNestedInput
@@ -15816,6 +15882,9 @@ export namespace Prisma {
     city?: NullableStringFieldUpdateOperationsInput | string | null
     postalCode?: NullableStringFieldUpdateOperationsInput | string | null
     notes?: NullableStringFieldUpdateOperationsInput | string | null
+    trackingNumber?: NullableStringFieldUpdateOperationsInput | string | null
+    courierName?: NullableStringFieldUpdateOperationsInput | string | null
+    adminNotes?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     items?: OrderItemUncheckedUpdateManyWithoutOrderNestedInput
@@ -15837,6 +15906,9 @@ export namespace Prisma {
     city?: string | null
     postalCode?: string | null
     notes?: string | null
+    trackingNumber?: string | null
+    courierName?: string | null
+    adminNotes?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
   }
@@ -15855,6 +15927,9 @@ export namespace Prisma {
     city?: NullableStringFieldUpdateOperationsInput | string | null
     postalCode?: NullableStringFieldUpdateOperationsInput | string | null
     notes?: NullableStringFieldUpdateOperationsInput | string | null
+    trackingNumber?: NullableStringFieldUpdateOperationsInput | string | null
+    courierName?: NullableStringFieldUpdateOperationsInput | string | null
+    adminNotes?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
@@ -15875,6 +15950,9 @@ export namespace Prisma {
     city?: NullableStringFieldUpdateOperationsInput | string | null
     postalCode?: NullableStringFieldUpdateOperationsInput | string | null
     notes?: NullableStringFieldUpdateOperationsInput | string | null
+    trackingNumber?: NullableStringFieldUpdateOperationsInput | string | null
+    courierName?: NullableStringFieldUpdateOperationsInput | string | null
+    adminNotes?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
@@ -16894,6 +16972,9 @@ export namespace Prisma {
     city?: SortOrder
     postalCode?: SortOrder
     notes?: SortOrder
+    trackingNumber?: SortOrder
+    courierName?: SortOrder
+    adminNotes?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
   }
@@ -16923,6 +17004,9 @@ export namespace Prisma {
     city?: SortOrder
     postalCode?: SortOrder
     notes?: SortOrder
+    trackingNumber?: SortOrder
+    courierName?: SortOrder
+    adminNotes?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
   }
@@ -16943,6 +17027,9 @@ export namespace Prisma {
     city?: SortOrder
     postalCode?: SortOrder
     notes?: SortOrder
+    trackingNumber?: SortOrder
+    courierName?: SortOrder
+    adminNotes?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
   }
@@ -19094,6 +19181,9 @@ export namespace Prisma {
     city?: string | null
     postalCode?: string | null
     notes?: string | null
+    trackingNumber?: string | null
+    courierName?: string | null
+    adminNotes?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     items?: OrderItemCreateNestedManyWithoutOrderInput
@@ -19114,6 +19204,9 @@ export namespace Prisma {
     city?: string | null
     postalCode?: string | null
     notes?: string | null
+    trackingNumber?: string | null
+    courierName?: string | null
+    adminNotes?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     items?: OrderItemUncheckedCreateNestedManyWithoutOrderInput
@@ -19273,6 +19366,9 @@ export namespace Prisma {
     city?: StringNullableFilter<"Order"> | string | null
     postalCode?: StringNullableFilter<"Order"> | string | null
     notes?: StringNullableFilter<"Order"> | string | null
+    trackingNumber?: StringNullableFilter<"Order"> | string | null
+    courierName?: StringNullableFilter<"Order"> | string | null
+    adminNotes?: StringNullableFilter<"Order"> | string | null
     createdAt?: DateTimeFilter<"Order"> | Date | string
     updatedAt?: DateTimeFilter<"Order"> | Date | string
   }
@@ -19450,6 +19546,9 @@ export namespace Prisma {
     city?: string | null
     postalCode?: string | null
     notes?: string | null
+    trackingNumber?: string | null
+    courierName?: string | null
+    adminNotes?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
     user?: UserCreateNestedOneWithoutOrdersInput
@@ -19471,6 +19570,9 @@ export namespace Prisma {
     city?: string | null
     postalCode?: string | null
     notes?: string | null
+    trackingNumber?: string | null
+    courierName?: string | null
+    adminNotes?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
   }
@@ -19555,6 +19657,9 @@ export namespace Prisma {
     city?: NullableStringFieldUpdateOperationsInput | string | null
     postalCode?: NullableStringFieldUpdateOperationsInput | string | null
     notes?: NullableStringFieldUpdateOperationsInput | string | null
+    trackingNumber?: NullableStringFieldUpdateOperationsInput | string | null
+    courierName?: NullableStringFieldUpdateOperationsInput | string | null
+    adminNotes?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     user?: UserUpdateOneWithoutOrdersNestedInput
@@ -19576,6 +19681,9 @@ export namespace Prisma {
     city?: NullableStringFieldUpdateOperationsInput | string | null
     postalCode?: NullableStringFieldUpdateOperationsInput | string | null
     notes?: NullableStringFieldUpdateOperationsInput | string | null
+    trackingNumber?: NullableStringFieldUpdateOperationsInput | string | null
+    courierName?: NullableStringFieldUpdateOperationsInput | string | null
+    adminNotes?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }
@@ -20505,6 +20613,9 @@ export namespace Prisma {
     city?: string | null
     postalCode?: string | null
     notes?: string | null
+    trackingNumber?: string | null
+    courierName?: string | null
+    adminNotes?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
   }
@@ -20564,6 +20675,9 @@ export namespace Prisma {
     city?: NullableStringFieldUpdateOperationsInput | string | null
     postalCode?: NullableStringFieldUpdateOperationsInput | string | null
     notes?: NullableStringFieldUpdateOperationsInput | string | null
+    trackingNumber?: NullableStringFieldUpdateOperationsInput | string | null
+    courierName?: NullableStringFieldUpdateOperationsInput | string | null
+    adminNotes?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     items?: OrderItemUpdateManyWithoutOrderNestedInput
@@ -20584,6 +20698,9 @@ export namespace Prisma {
     city?: NullableStringFieldUpdateOperationsInput | string | null
     postalCode?: NullableStringFieldUpdateOperationsInput | string | null
     notes?: NullableStringFieldUpdateOperationsInput | string | null
+    trackingNumber?: NullableStringFieldUpdateOperationsInput | string | null
+    courierName?: NullableStringFieldUpdateOperationsInput | string | null
+    adminNotes?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
     items?: OrderItemUncheckedUpdateManyWithoutOrderNestedInput
@@ -20604,6 +20721,9 @@ export namespace Prisma {
     city?: NullableStringFieldUpdateOperationsInput | string | null
     postalCode?: NullableStringFieldUpdateOperationsInput | string | null
     notes?: NullableStringFieldUpdateOperationsInput | string | null
+    trackingNumber?: NullableStringFieldUpdateOperationsInput | string | null
+    courierName?: NullableStringFieldUpdateOperationsInput | string | null
+    adminNotes?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
   }

@@ -100,6 +100,11 @@ model Order {
   city            String?
   postalCode      String?
   notes           String?
+  // Fulfillment tracking — visible to admins, surfaced to customers via the tracking page.
+  trackingNumber  String?
+  courierName     String?
+  // Internal-only — admin scratchpad, never returned to customers.
+  adminNotes      String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 }
