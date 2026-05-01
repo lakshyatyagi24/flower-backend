@@ -178,7 +178,10 @@ export class OrdersService {
     if (!email || order.customerEmail?.toLowerCase() !== email.trim().toLowerCase()) {
       throw new ForbiddenException('Email does not match this order');
     }
-    return order;
+    // Strip internal-only fields before returning to the public tracking endpoint.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { adminNotes: _adminNotes, ...publicOrder } = order;
+    return publicOrder;
   }
 
   async listAll(params: { status?: string; take?: number; skip?: number }) {
