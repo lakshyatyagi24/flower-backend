@@ -38,6 +38,8 @@ export class OrdersService {
         productName: true,
         quantity: true,
         unitPrice: true,
+        gstRate: true,
+        gstAmount: true,
         product: { select: { id: true, slug: true, image: true } },
       },
     },
@@ -73,6 +75,9 @@ export class OrdersService {
       price: number;
       stock: number;
       active: boolean;
+      saleMode: 'PURCHASE' | 'ENQUIRY';
+      gstRate: number;
+      minOrderQty: number;
     };
     const products: ProductRow[] = await this.prisma.product.findMany({
       where: { id: { in: productIds } },
@@ -83,27 +88,37 @@ export class OrdersService {
     const productMap = new Map<number, ProductRow>(products.map((p) => [p.id, p]));
 
     let subtotal = 0;
+    let gstTotal = 0;
     const itemRows = input.items.map((it) => {
       const product = productMap.get(it.productId)!;
       if (!product.active) throw new BadRequestException(`Product "${product.name}" is not available`);
-      const qty = Math.max(1, Math.floor(it.quantity || 1));
+      if (product.saleMode === 'ENQUIRY') {
+        throw new BadRequestException(`"${product.name}" is enquiry-only — please send an enquiry instead`);
+      }
+      const qty = Math.max(product.minOrderQty || 1, Math.floor(it.quantity || 1));
       if (product.stock > 0 && qty > product.stock) {
         throw new BadRequestException(`Only ${product.stock} of "${product.name}" available`);
       }
       const lineTotal = product.price * qty;
+      const gstRate = product.gstRate || 0;
+      const gstAmount = +((lineTotal * gstRate) / 100).toFixed(2);
       subtotal += lineTotal;
+      gstTotal += gstAmount;
       return {
         productId: product.id,
         productName: product.name,
         quantity: qty,
         unitPrice: product.price,
+        gstRate,
+        gstAmount,
       };
     });
 
     const flatRate = await this.loadShippingRate();
     const freeThreshold = await this.loadFreeShippingThreshold();
     const shipping = freeThreshold !== null && subtotal >= freeThreshold ? 0 : flatRate;
-    const total = subtotal + shipping;
+    const gst = +gstTotal.toFixed(2);
+    const total = +(subtotal + shipping + gst).toFixed(2);
 
     return this.prisma.$transaction(async (tx) => {
       const order = await tx.order.create({
@@ -111,6 +126,7 @@ export class OrdersService {
           userId: userId ?? null,
           subtotal,
           shipping,
+          gst,
           total,
           status: 'PENDING',
           paymentMethod: input.paymentMethod || 'COD',
@@ -205,7 +221,7 @@ export class OrdersService {
   }
 
   async stats() {
-    const [orderCount, productCount, customerCount, totalAgg, recentOrders] = await Promise.all([
+    const [orderCount, productCount, customerCount, totalAgg, recentOrders, openEnquiries] = await Promise.all([
       this.prisma.order.count(),
       this.prisma.product.count(),
       this.prisma.user.count({ where: { role: 'CUSTOMER' } }),
@@ -221,6 +237,7 @@ export class OrdersService {
           createdAt: true,
         },
       }),
+      this.prisma.enquiry.count({ where: { status: { in: ['NEW', 'CONTACTED', 'QUOTED'] } } }),
     ]);
     return {
       orderCount,
@@ -228,6 +245,7 @@ export class OrdersService {
       customerCount,
       revenue: totalAgg._sum.total ?? 0,
       recentOrders,
+      openEnquiries,
     };
   }
 }

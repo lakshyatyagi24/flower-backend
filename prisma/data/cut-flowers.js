@@ -65,6 +65,11 @@ const cutFlowerCategory = {
   name: 'Cut Flowers',
   slug: 'cut-flowers',
   image: 'https://cdn.shopify.com/s/files/1/0047/4637/9362/files/IMG_4116-3.jpg?v=1697649468',
+  description: 'Farm-fresh cut flowers sourced daily from the mandi. Bulk and corporate-friendly pricing.',
+  productType: 'CUT_FLOWER',
+  defaultSaleMode: 'PURCHASE',
+  defaultGstRate: 0,
+  sortOrder: 1,
 };
 
 function slugify(input) {
@@ -260,7 +265,15 @@ async function seedCutFlowers(prisma) {
   await prisma.category.upsert({
     where: { slug: cutFlowerCategory.slug },
     create: cutFlowerCategory,
-    update: { name: cutFlowerCategory.name, image: cutFlowerCategory.image },
+    update: {
+      name: cutFlowerCategory.name,
+      image: cutFlowerCategory.image,
+      description: cutFlowerCategory.description,
+      productType: cutFlowerCategory.productType,
+      defaultSaleMode: cutFlowerCategory.defaultSaleMode,
+      defaultGstRate: cutFlowerCategory.defaultGstRate,
+      sortOrder: cutFlowerCategory.sortOrder,
+    },
   });
   const category = await prisma.category.findUnique({ where: { slug: cutFlowerCategory.slug } });
 
@@ -275,6 +288,11 @@ async function seedCutFlowers(prisma) {
       active: true,
       image: p.image,
       categoryId: category.id,
+      productType: 'CUT_FLOWER',
+      saleMode: 'PURCHASE',
+      gstRate: 0,
+      unit: 'stem',
+      minOrderQty: 1,
     };
     await prisma.product.upsert({
       where: { slug: p.slug },
@@ -286,7 +304,11 @@ async function seedCutFlowers(prisma) {
         featured: data.featured,
         image: data.image,
         categoryId: data.categoryId,
-        // intentionally NOT updating stock — preserve whatever the admin has set.
+        productType: data.productType,
+        saleMode: data.saleMode,
+        gstRate: data.gstRate,
+        unit: data.unit,
+        // intentionally NOT updating stock or minOrderQty — preserve admin overrides.
       },
     });
   }

@@ -125,7 +125,13 @@ exports.Prisma.CategoryScalarFieldEnum = {
   name: 'name',
   slug: 'slug',
   image: 'image',
-  parentId: 'parentId'
+  description: 'description',
+  parentId: 'parentId',
+  productType: 'productType',
+  defaultSaleMode: 'defaultSaleMode',
+  defaultGstRate: 'defaultGstRate',
+  sortOrder: 'sortOrder',
+  active: 'active'
 };
 
 exports.Prisma.ProductScalarFieldEnum = {
@@ -134,7 +140,18 @@ exports.Prisma.ProductScalarFieldEnum = {
   slug: 'slug',
   description: 'description',
   price: 'price',
-  categoryId: 'categoryId'
+  image: 'image',
+  stock: 'stock',
+  featured: 'featured',
+  active: 'active',
+  productType: 'productType',
+  saleMode: 'saleMode',
+  gstRate: 'gstRate',
+  unit: 'unit',
+  minOrderQty: 'minOrderQty',
+  categoryId: 'categoryId',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
 };
 
 exports.Prisma.UserScalarFieldEnum = {
@@ -143,14 +160,26 @@ exports.Prisma.UserScalarFieldEnum = {
   email: 'email',
   password: 'password',
   phone: 'phone',
+  role: 'role',
   createdAt: 'createdAt'
 };
 
 exports.Prisma.OrderScalarFieldEnum = {
   id: 'id',
   userId: 'userId',
+  subtotal: 'subtotal',
+  shipping: 'shipping',
+  gst: 'gst',
   total: 'total',
   status: 'status',
+  paymentMethod: 'paymentMethod',
+  customerName: 'customerName',
+  customerEmail: 'customerEmail',
+  customerPhone: 'customerPhone',
+  shippingAddress: 'shippingAddress',
+  city: 'city',
+  postalCode: 'postalCode',
+  notes: 'notes',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 };
@@ -159,8 +188,18 @@ exports.Prisma.OrderItemScalarFieldEnum = {
   id: 'id',
   orderId: 'orderId',
   productId: 'productId',
+  productName: 'productName',
   quantity: 'quantity',
-  unitPrice: 'unitPrice'
+  unitPrice: 'unitPrice',
+  gstRate: 'gstRate',
+  gstAmount: 'gstAmount'
+};
+
+exports.Prisma.SettingScalarFieldEnum = {
+  id: 'id',
+  key: 'key',
+  value: 'value',
+  updatedAt: 'updatedAt'
 };
 
 exports.Prisma.BookingScalarFieldEnum = {
@@ -185,6 +224,39 @@ exports.Prisma.SliderScalarFieldEnum = {
   config: 'config',
   sortOrder: 'sortOrder',
   active: 'active'
+};
+
+exports.Prisma.ReviewScalarFieldEnum = {
+  id: 'id',
+  productId: 'productId',
+  userId: 'userId',
+  rating: 'rating',
+  title: 'title',
+  body: 'body',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+};
+
+exports.Prisma.EnquiryScalarFieldEnum = {
+  id: 'id',
+  userId: 'userId',
+  productId: 'productId',
+  productName: 'productName',
+  customerName: 'customerName',
+  customerEmail: 'customerEmail',
+  customerPhone: 'customerPhone',
+  quantity: 'quantity',
+  eventDate: 'eventDate',
+  occasion: 'occasion',
+  budget: 'budget',
+  address: 'address',
+  city: 'city',
+  message: 'message',
+  source: 'source',
+  status: 'status',
+  adminNotes: 'adminNotes',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
 };
 
 exports.Prisma.SortOrder = {
@@ -212,6 +284,24 @@ exports.Prisma.JsonNullValueFilter = {
   JsonNull: Prisma.JsonNull,
   AnyNull: Prisma.AnyNull
 };
+exports.ProductType = exports.$Enums.ProductType = {
+  CUT_FLOWER: 'CUT_FLOWER',
+  PLANT: 'PLANT',
+  BOUQUET: 'BOUQUET',
+  ARRANGEMENT: 'ARRANGEMENT',
+  HAMPER: 'HAMPER'
+};
+
+exports.SaleMode = exports.$Enums.SaleMode = {
+  PURCHASE: 'PURCHASE',
+  ENQUIRY: 'ENQUIRY'
+};
+
+exports.UserRole = exports.$Enums.UserRole = {
+  CUSTOMER: 'CUSTOMER',
+  ADMIN: 'ADMIN'
+};
+
 exports.OrderStatus = exports.$Enums.OrderStatus = {
   PENDING: 'PENDING',
   PAID: 'PAID',
@@ -226,14 +316,25 @@ exports.BookingStatus = exports.$Enums.BookingStatus = {
   CANCELLED: 'CANCELLED'
 };
 
+exports.EnquiryStatus = exports.$Enums.EnquiryStatus = {
+  NEW: 'NEW',
+  CONTACTED: 'CONTACTED',
+  QUOTED: 'QUOTED',
+  CONVERTED: 'CONVERTED',
+  CLOSED: 'CLOSED'
+};
+
 exports.Prisma.ModelName = {
   Category: 'Category',
   Product: 'Product',
   User: 'User',
   Order: 'Order',
   OrderItem: 'OrderItem',
+  Setting: 'Setting',
   Booking: 'Booking',
-  Slider: 'Slider'
+  Slider: 'Slider',
+  Review: 'Review',
+  Enquiry: 'Enquiry'
 };
 
 /**

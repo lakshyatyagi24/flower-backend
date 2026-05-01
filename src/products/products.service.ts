@@ -6,9 +6,14 @@ interface ListParams {
   q?: string;
   featured?: boolean;
   active?: boolean;
+  productType?: string;
+  saleMode?: string;
   take?: number;
   skip?: number;
 }
+
+type ProductTypeValue = 'CUT_FLOWER' | 'PLANT' | 'BOUQUET' | 'ARRANGEMENT' | 'HAMPER';
+type SaleModeValue = 'PURCHASE' | 'ENQUIRY';
 
 interface ProductInput {
   name: string;
@@ -20,7 +25,15 @@ interface ProductInput {
   featured?: boolean;
   active?: boolean;
   categoryId?: number | null;
+  productType?: ProductTypeValue;
+  saleMode?: SaleModeValue;
+  gstRate?: number;
+  unit?: string;
+  minOrderQty?: number;
 }
+
+const VALID_PRODUCT_TYPES: ProductTypeValue[] = ['CUT_FLOWER', 'PLANT', 'BOUQUET', 'ARRANGEMENT', 'HAMPER'];
+const VALID_SALE_MODES: SaleModeValue[] = ['PURCHASE', 'ENQUIRY'];
 
 function slugify(input: string): string {
   return input
@@ -74,8 +87,13 @@ export class ProductsService {
     stock: true,
     featured: true,
     active: true,
+    productType: true,
+    saleMode: true,
+    gstRate: true,
+    unit: true,
+    minOrderQty: true,
     categoryId: true,
-    category: { select: { id: true, name: true, slug: true } },
+    category: { select: { id: true, name: true, slug: true, productType: true, defaultSaleMode: true } },
     createdAt: true,
     updatedAt: true,
   } as const;
@@ -123,6 +141,12 @@ export class ProductsService {
     if (params.category) {
       where.category = { slug: params.category };
     }
+    if (params.productType && VALID_PRODUCT_TYPES.includes(params.productType as ProductTypeValue)) {
+      where.productType = params.productType;
+    }
+    if (params.saleMode && VALID_SALE_MODES.includes(params.saleMode as SaleModeValue)) {
+      where.saleMode = params.saleMode;
+    }
     if (params.q) {
       const q = params.q;
       where.OR = [
@@ -164,20 +188,29 @@ export class ProductsService {
 
   async create(input: ProductInput) {
     if (!input.name?.trim()) throw new BadRequestException('Name is required');
-    if (typeof input.price !== 'number' || input.price < 0) throw new BadRequestException('Valid price is required');
+    const saleMode: SaleModeValue = input.saleMode && VALID_SALE_MODES.includes(input.saleMode) ? input.saleMode : 'PURCHASE';
+    if (saleMode === 'PURCHASE') {
+      if (typeof input.price !== 'number' || input.price < 0) throw new BadRequestException('Valid price is required for purchase products');
+    }
     const slug = (input.slug?.trim() || slugify(input.name)).toLowerCase();
     if (!slug) throw new BadRequestException('Slug could not be derived');
+    const productType: ProductTypeValue = input.productType && VALID_PRODUCT_TYPES.includes(input.productType) ? input.productType : 'CUT_FLOWER';
     try {
       return await this.prisma.product.create({
         data: {
           name: input.name.trim(),
           slug,
           description: input.description ?? null,
-          price: input.price,
+          price: typeof input.price === 'number' ? input.price : 0,
           image: normalizeImageUrl(input.image ?? null),
           stock: input.stock ?? 0,
           featured: input.featured ?? false,
           active: input.active ?? true,
+          productType,
+          saleMode,
+          gstRate: typeof input.gstRate === 'number' && input.gstRate >= 0 ? input.gstRate : 0,
+          unit: input.unit?.trim() || 'piece',
+          minOrderQty: input.minOrderQty && input.minOrderQty > 0 ? Math.floor(input.minOrderQty) : 1,
           categoryId: input.categoryId ?? null,
         },
         select: this.select,
@@ -206,6 +239,22 @@ export class ProductsService {
     if (input.featured !== undefined) data.featured = !!input.featured;
     if (input.active !== undefined) data.active = !!input.active;
     if (input.categoryId !== undefined) data.categoryId = input.categoryId;
+    if (input.productType !== undefined) {
+      if (!VALID_PRODUCT_TYPES.includes(input.productType)) throw new BadRequestException('Invalid productType');
+      data.productType = input.productType;
+    }
+    if (input.saleMode !== undefined) {
+      if (!VALID_SALE_MODES.includes(input.saleMode)) throw new BadRequestException('Invalid saleMode');
+      data.saleMode = input.saleMode;
+    }
+    if (input.gstRate !== undefined) {
+      if (typeof input.gstRate !== 'number' || input.gstRate < 0) throw new BadRequestException('Invalid gstRate');
+      data.gstRate = input.gstRate;
+    }
+    if (input.unit !== undefined) data.unit = input.unit?.trim() || 'piece';
+    if (input.minOrderQty !== undefined) {
+      data.minOrderQty = input.minOrderQty && input.minOrderQty > 0 ? Math.floor(input.minOrderQty) : 1;
+    }
     try {
       return await this.prisma.product.update({ where: { id }, data, select: this.select });
     } catch (e: any) {

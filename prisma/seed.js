@@ -1,7 +1,9 @@
-// Seed script — creates an admin user, a few categories, and sample products
+// Seed script — creates an admin user, business-aligned categories, and the
+// cut-flower catalogue. Plants / Bouquets / Arrangements / Hampers categories
+// are seeded as enquiry-only or empty so the admin can add real products.
 // Run: npx prisma db seed
 const path = require('path');
-const { createHmac, scryptSync, randomBytes } = require('crypto');
+const { scryptSync, randomBytes } = require('crypto');
 const { seedCutFlowers } = require('./data/cut-flowers');
 
 function loadPrisma() {
@@ -43,244 +45,97 @@ async function main() {
     console.log(`Admin already present: ${adminEmail}`);
   }
 
+  // Categories aligned to client's business model:
+  //   - Cut Flowers (PURCHASE)        → primary, online payment, 0% GST
+  //   - Plants (PURCHASE)             → secondary, online payment, 0% GST
+  //   - Corporate Bouquets (ENQUIRY)  → bulk-only, 5% GST as gift category
+  //   - Arrangements (ENQUIRY)        → custom-built, 5% GST
+  //   - Hampers (ENQUIRY)             → custom-built, 5% GST
+  // Cut Flowers is upserted by data/cut-flowers.js below; the rest are seeded here.
   const categorySeed = [
-    { name: 'Bouquets', slug: 'bouquets' },
-    { name: 'Arrangements', slug: 'arrangements' },
-    { name: 'Hampers', slug: 'hampers' },
-    { name: 'Plants', slug: 'plants' },
+    {
+      name: 'Plants',
+      slug: 'plants',
+      description: 'Indoor and outdoor plants. Real photos to be uploaded by the store admin.',
+      productType: 'PLANT',
+      defaultSaleMode: 'PURCHASE',
+      defaultGstRate: 0,
+      sortOrder: 2,
+    },
+    {
+      name: 'Corporate Bouquets',
+      slug: 'corporate-bouquets',
+      description: 'Bulk bouquet orders for corporate events, conferences, and gifting. Enquire for a custom quote.',
+      productType: 'BOUQUET',
+      defaultSaleMode: 'ENQUIRY',
+      defaultGstRate: 5,
+      sortOrder: 3,
+    },
+    {
+      name: 'Arrangements',
+      slug: 'arrangements',
+      description: 'Custom-built floral arrangements for events and gifting. Enquire with your preferences.',
+      productType: 'ARRANGEMENT',
+      defaultSaleMode: 'ENQUIRY',
+      defaultGstRate: 5,
+      sortOrder: 4,
+    },
+    {
+      name: 'Hampers',
+      slug: 'hampers',
+      description: 'Curated gift hampers with flowers, plants, and accents. Enquire for a custom build.',
+      productType: 'HAMPER',
+      defaultSaleMode: 'ENQUIRY',
+      defaultGstRate: 5,
+      sortOrder: 5,
+    },
   ];
+
   for (const c of categorySeed) {
     await prisma.category.upsert({
       where: { slug: c.slug },
       create: c,
-      update: {},
-    });
-  }
-  const bouquets = await prisma.category.findUnique({ where: { slug: 'bouquets' } });
-  const arrangements = await prisma.category.findUnique({ where: { slug: 'arrangements' } });
-  const hampers = await prisma.category.findUnique({ where: { slug: 'hampers' } });
-  const plants = await prisma.category.findUnique({ where: { slug: 'plants' } });
-
-  // Real products sourced from theflora.in
-  const productSeed = [
-    {
-      slug: 'blue-gardenia',
-      name: 'Blue Gardenia',
-      description:
-        'A wild yet elegant hand-tied bouquet with 22–24 stems — hydrangeas, oriental lilies, chrysanthemums, asiatic lilies, tuberoses and avalanche roses. Comes with flower food and a care card.',
-      price: 2950,
-      stock: 20,
-      featured: true,
-      image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/BlueGardenia2.jpg?v=1623742081',
-      categoryId: bouquets?.id ?? null,
-    },
-    {
-      slug: 'blush-of-affection',
-      name: 'Blush of Affection',
-      description:
-        'A premium blush-toned hand-tied bouquet with lush farm-fresh blooms in soft pinks and creams. An elegant gift for anniversaries, birthdays, or any occasion that calls for something special.',
-      price: 3590,
-      stock: 15,
-      featured: true,
-      image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/files/IMG_5243.jpg?v=1706862106',
-      categoryId: bouquets?.id ?? null,
-    },
-    {
-      slug: 'flourishing-opulence',
-      name: 'Flourishing Opulence',
-      description:
-        'A festive arrangement of 25–30 farm-fresh blooms — blush pink roses, hot pink spray carnations, chrysanthemums, lilies and alstroemeria. Radiates abundance, gratitude and joy.',
-      price: 1850,
-      stock: 25,
-      featured: false,
-      image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/THEFLORAB2_3.jpg?v=1604313892',
-      categoryId: bouquets?.id ?? null,
-    },
-    {
-      slug: 'a-riot-of-colours',
-      name: 'A Riot of Colours',
-      description:
-        'A vibrant explosion of seasonal blooms in cheerful mixed colours — perfect for birthdays, celebrations, and anyone who loves bold, lively florals. Hand-tied with care.',
-      price: 2750,
-      stock: 18,
-      featured: true,
-      image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/TheFlora_AllTheColors_2.jpg?v=1665732723',
-      categoryId: bouquets?.id ?? null,
-    },
-    {
-      slug: 'a-pocketful-of-sunshine',
-      name: 'A Pocketful of Sunshine',
-      description:
-        'A charming flower basket arrangement bursting with cheerful yellow and orange blooms. Hand-crafted and ready to display — a bright burst of sunshine for any home or desk.',
-      price: 1950,
-      stock: 20,
-      featured: false,
-      image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/WES_8950.jpg?v=1619006766',
-      categoryId: arrangements?.id ?? null,
-    },
-    {
-      slug: 'brand-new-day',
-      name: 'Brand New Day',
-      description:
-        'A fresh, modern floral arrangement in soft seasonal colours with a welcoming, relaxed aesthetic. Perfect for new beginnings — new home, new job, new arrival — or simply to brighten someone\'s day.',
-      price: 1750,
-      stock: 22,
-      featured: false,
-      image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/files/IMG_4685_caa6b990-fdb2-4a4b-9929-cd3b21cb0085.jpg?v=1705148238',
-      categoryId: arrangements?.id ?? null,
-    },
-    {
-      slug: 'celebration-hamper',
-      name: 'Celebration Hamper',
-      description:
-        'A beautiful keepsake gift box with farm-fresh flowers, artisan chocolates and a scented candle. The complete celebration gift — thoughtfully packed for birthdays, anniversaries and milestones.',
-      price: 2499,
-      stock: 10,
-      featured: true,
-      image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/a0e57ed4-4638-4eb9-948f-ad139bb042d5.jpg?v=1660194809',
-      categoryId: hampers?.id ?? null,
-    },
-    {
-      slug: 'orchid-grace',
-      name: 'Orchid Grace',
-      description:
-        'A graceful Phalaenopsis orchid in a white ceramic pot — long-lasting, elegant, and a timeless living gift. The ceramic pot is a beautiful keepsake long after the blooms have faded.',
-      price: 1899,
-      stock: 12,
-      featured: true,
-      image:
-        'https://cdn.shopify.com/s/files/1/0047/4637/9362/products/IMG_6120a.jpg?v=1682145070',
-      categoryId: plants?.id ?? null,
-    },
-  ];
-  for (const p of productSeed) {
-    await prisma.product.upsert({
-      where: { slug: p.slug },
-      create: p,
       update: {
-        name: p.name,
-        description: p.description,
-        price: p.price,
-        featured: p.featured,
-        image: p.image,
+        name: c.name,
+        description: c.description,
+        productType: c.productType,
+        defaultSaleMode: c.defaultSaleMode,
+        defaultGstRate: c.defaultGstRate,
+        sortOrder: c.sortOrder,
       },
     });
   }
-  console.log(`Seeded ${productSeed.length} products`);
+  console.log(`Seeded ${categorySeed.length} non-cut-flower categories`);
 
-  // Sample reviewers — created idempotently.
-  const reviewerSeed = [
-    { email: 'priya.s@example.com', name: 'Priya S.' },
-    { email: 'rahul.k@example.com', name: 'Rahul K.' },
-    { email: 'anjali.m@example.com', name: 'Anjali M.' },
-    { email: 'vikram.p@example.com', name: 'Vikram P.' },
-  ];
-  const reviewers = [];
-  for (const r of reviewerSeed) {
-    const existing = await prisma.user.findUnique({ where: { email: r.email } });
-    if (existing) {
-      reviewers.push(existing);
-    } else {
-      const created = await prisma.user.create({
-        data: {
-          email: r.email,
-          password: hashPassword('reviewer1234'),
-          name: r.name,
-          role: 'CUSTOMER',
-        },
-      });
-      reviewers.push(created);
-    }
-  }
-
-  const reviewSeed = [
-    {
-      productSlug: 'blue-gardenia',
-      reviewerEmail: 'priya.s@example.com',
-      rating: 5,
-      title: 'Absolutely stunning',
-      body: 'My Blue Gardenia bouquet arrived perfectly fresh — stems vibrant, packaging immaculate. The hydrangeas and oriental lilies were breathtaking. Lasted over a week!',
-    },
-    {
-      productSlug: 'blue-gardenia',
-      reviewerEmail: 'rahul.k@example.com',
-      rating: 5,
-      title: 'Perfect for a special occasion',
-      body: 'Ordered this for my parents\' anniversary. The wild, lush look was exactly what I wanted. The flower food and care card were a nice touch.',
-    },
-    {
-      productSlug: 'a-pocketful-of-sunshine',
-      reviewerEmail: 'anjali.m@example.com',
-      rating: 5,
-      title: 'Brightest basket arrangement',
-      body: 'The yellows and oranges were so cheerful! It instantly brightened up my desk. Well-crafted and arrived in perfect condition.',
-    },
-    {
-      productSlug: 'orchid-grace',
-      reviewerEmail: 'priya.s@example.com',
-      rating: 5,
-      title: 'Graceful and long-lasting',
-      body: 'A graceful gift — the ceramic pot is a true keeper. The orchid is still blooming two months later. Exceptional quality.',
-    },
-    {
-      productSlug: 'celebration-hamper',
-      reviewerEmail: 'rahul.k@example.com',
-      rating: 5,
-      title: 'Complete celebration in a box',
-      body: 'Flowers, chocolates and the candle were all top tier. Everything was beautifully arranged in the keepsake box. My wife was overjoyed!',
-    },
-    {
-      productSlug: 'a-riot-of-colours',
-      reviewerEmail: 'vikram.p@example.com',
-      rating: 5,
-      title: 'Exactly as described',
-      body: 'Sent this for a birthday and it was a hit. Vibrant, bold, and full of life. Same-day delivery was seamless.',
-    },
-    {
-      productSlug: 'flourishing-opulence',
-      reviewerEmail: 'anjali.m@example.com',
-      rating: 4,
-      title: 'Beautiful and fresh',
-      body: 'Lovely mix of roses, carnations and lilies. Great value for the price. A few stems were slightly smaller than expected but overall very pleased.',
-    },
-  ];
-  for (const r of reviewSeed) {
-    const product = await prisma.product.findUnique({ where: { slug: r.productSlug } });
-    const reviewer = reviewers.find((u) => u.email === r.reviewerEmail);
-    if (!product || !reviewer) continue;
-    await prisma.review.upsert({
-      where: { productId_userId: { productId: product.id, userId: reviewer.id } },
-      create: {
-        productId: product.id,
-        userId: reviewer.id,
-        rating: r.rating,
-        title: r.title,
-        body: r.body,
-      },
-      update: {
-        rating: r.rating,
-        title: r.title,
-        body: r.body,
-      },
+  // Retire the legacy retail "Bouquets" category if it exists from an older seed.
+  // Soft-deactivate any products previously assigned to it instead of hard-deleting.
+  const legacyBouquets = await prisma.category.findUnique({ where: { slug: 'bouquets' } });
+  if (legacyBouquets) {
+    await prisma.product.updateMany({
+      where: { categoryId: legacyBouquets.id },
+      data: { active: false },
     });
+    await prisma.category.update({
+      where: { id: legacyBouquets.id },
+      data: { active: false, sortOrder: 99 },
+    });
+    console.log('Retired legacy retail "Bouquets" category and deactivated its products');
   }
-  console.log(`Seeded ${reviewSeed.length} reviews`);
 
+  // Seed cut flowers (real catalogue from theflora snapshot).
   const cutFlowers = await seedCutFlowers(prisma);
-  console.log(`Seeded ${cutFlowers.count} cut-flower products under category '${cutFlowers.category.slug}'`);
+  console.log(`Seeded ${cutFlowers.count} cut-flower products under '${cutFlowers.category.slug}'`);
 
+  // Default store settings — placeholders, to be overwritten by the admin
+  // via the settings page once they share their real contact details.
   const defaultSettings = {
     'store.name': 'Fresh Petals India',
-    'store.email': 'care@freshpetalsindia.com',
-    'store.phone': '+91 99000 99000',
-    'store.address': 'India-wide delivery',
+    'store.email': 'orders@example.com',
+    'store.phone': '+91 00000 00000',
+    'store.whatsapp': '+91 00000 00000',
+    'store.address': 'Delhi NCR — please update with real address',
+    'store.instagram': '',
+    'store.gstin': '',
     'shipping.flatRate': '99',
     'shipping.freeThreshold': '1499',
   };
@@ -291,7 +146,7 @@ async function main() {
       update: {},
     });
   }
-  console.log('Seeded default settings');
+  console.log('Seeded default settings (placeholders — admin should update)');
 }
 
 main()

@@ -5,45 +5,79 @@ import { PrismaService } from '../prisma/prisma.service';
 export class EcommerceService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // Return top-level categories with minimal fields and children
+  // Return top-level active categories sorted by sortOrder
   async getCategories() {
     return this.prisma.category.findMany({
-      where: { parentId: null },
-      orderBy: { id: 'asc' },
+      where: { parentId: null, active: true },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
       select: {
         id: true,
         name: true,
         slug: true,
         image: true,
+        description: true,
+        productType: true,
+        defaultSaleMode: true,
+        defaultGstRate: true,
+        sortOrder: true,
+        active: true,
         children: { select: { id: true, name: true, slug: true } },
       },
     });
   }
 
-  // Return all categories with full hierarchy
+  // Return all categories with full hierarchy (admin)
   async getAllCategories() {
     return this.prisma.category.findMany({
-      orderBy: { id: 'asc' },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
       select: {
         id: true,
         name: true,
         slug: true,
         image: true,
+        description: true,
+        productType: true,
+        defaultSaleMode: true,
+        defaultGstRate: true,
+        sortOrder: true,
+        active: true,
         parentId: true,
         children: {
-          select: { id: true, name: true, slug: true, image: true, parentId: true },
-          orderBy: { id: 'asc' },
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+            image: true,
+            parentId: true,
+            productType: true,
+            defaultSaleMode: true,
+            defaultGstRate: true,
+            sortOrder: true,
+            active: true,
+          },
+          orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
         },
       },
     });
   }
 
   // Create a new category
-  async createCategory(data: { name: string; slug: string; image?: string; parentId?: number }) {
+  async createCategory(data: {
+    name: string;
+    slug: string;
+    image?: string;
+    description?: string;
+    parentId?: number;
+    productType?: 'CUT_FLOWER' | 'PLANT' | 'BOUQUET' | 'ARRANGEMENT' | 'HAMPER';
+    defaultSaleMode?: 'PURCHASE' | 'ENQUIRY';
+    defaultGstRate?: number;
+    sortOrder?: number;
+    active?: boolean;
+  }) {
     // Check if creating a main category and enforce 8 limit
     if (!data.parentId) {
       const mainCategoryCount = await this.prisma.category.count({
-        where: { parentId: null },
+        where: { parentId: null, active: true },
       });
       if (mainCategoryCount >= 8) {
         throw new BadRequestException('Maximum 8 main categories allowed');
@@ -52,13 +86,30 @@ export class EcommerceService {
 
     try {
       return await this.prisma.category.create({
-        data,
+        data: {
+          name: data.name,
+          slug: data.slug,
+          image: data.image,
+          description: data.description,
+          parentId: data.parentId ?? null,
+          productType: data.productType ?? 'CUT_FLOWER',
+          defaultSaleMode: data.defaultSaleMode ?? 'PURCHASE',
+          defaultGstRate: typeof data.defaultGstRate === 'number' ? data.defaultGstRate : 0,
+          sortOrder: typeof data.sortOrder === 'number' ? data.sortOrder : 0,
+          active: data.active ?? true,
+        },
         select: {
           id: true,
           name: true,
           slug: true,
           image: true,
+          description: true,
           parentId: true,
+          productType: true,
+          defaultSaleMode: true,
+          defaultGstRate: true,
+          sortOrder: true,
+          active: true,
         },
       });
     } catch (error: any) {
@@ -70,7 +121,17 @@ export class EcommerceService {
   }
 
   // Update an existing category
-  async updateCategory(id: number, data: { name?: string; slug?: string; image?: string }) {
+  async updateCategory(id: number, data: {
+    name?: string;
+    slug?: string;
+    image?: string;
+    description?: string;
+    productType?: 'CUT_FLOWER' | 'PLANT' | 'BOUQUET' | 'ARRANGEMENT' | 'HAMPER';
+    defaultSaleMode?: 'PURCHASE' | 'ENQUIRY';
+    defaultGstRate?: number;
+    sortOrder?: number;
+    active?: boolean;
+  }) {
     try {
       return await this.prisma.category.update({
         where: { id },
@@ -80,7 +141,13 @@ export class EcommerceService {
           name: true,
           slug: true,
           image: true,
+          description: true,
           parentId: true,
+          productType: true,
+          defaultSaleMode: true,
+          defaultGstRate: true,
+          sortOrder: true,
+          active: true,
         },
       });
     } catch (error: any) {

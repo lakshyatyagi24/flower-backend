@@ -34,7 +34,18 @@ export class EcommerceController {
   @Roles('ADMIN')
   @Post('categories')
   async createCategory(
-    @Body() data: { name: string; slug: string; image?: string; parentId?: number },
+    @Body() data: {
+      name: string;
+      slug: string;
+      image?: string;
+      description?: string;
+      parentId?: number;
+      productType?: 'CUT_FLOWER' | 'PLANT' | 'BOUQUET' | 'ARRANGEMENT' | 'HAMPER';
+      defaultSaleMode?: 'PURCHASE' | 'ENQUIRY';
+      defaultGstRate?: number;
+      sortOrder?: number;
+      active?: boolean;
+    },
   ) {
     return this.ecommerceService.createCategory(data);
   }
@@ -45,7 +56,17 @@ export class EcommerceController {
   @Put('categories/:id')
   async updateCategory(
     @Param('id') id: string,
-    @Body() data: { name?: string; slug?: string; image?: string },
+    @Body() data: {
+      name?: string;
+      slug?: string;
+      image?: string;
+      description?: string;
+      productType?: 'CUT_FLOWER' | 'PLANT' | 'BOUQUET' | 'ARRANGEMENT' | 'HAMPER';
+      defaultSaleMode?: 'PURCHASE' | 'ENQUIRY';
+      defaultGstRate?: number;
+      sortOrder?: number;
+      active?: boolean;
+    },
   ) {
     return this.ecommerceService.updateCategory(parseInt(id), data);
   }

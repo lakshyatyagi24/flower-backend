@@ -23,6 +23,11 @@ interface ProductBody {
   featured?: boolean;
   active?: boolean;
   categoryId?: number | null;
+  productType?: 'CUT_FLOWER' | 'PLANT' | 'BOUQUET' | 'ARRANGEMENT' | 'HAMPER';
+  saleMode?: 'PURCHASE' | 'ENQUIRY';
+  gstRate?: number;
+  unit?: string;
+  minOrderQty?: number;
 }
 
 @Controller('products')
@@ -35,6 +40,8 @@ export class ProductsController {
     @Query('q') q?: string,
     @Query('featured') featured?: string,
     @Query('active') active?: string,
+    @Query('productType') productType?: string,
+    @Query('saleMode') saleMode?: string,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
   ) {
@@ -43,6 +50,8 @@ export class ProductsController {
       q,
       featured: featured === undefined ? undefined : featured === 'true',
       active: active === undefined ? true : active === 'true',
+      productType,
+      saleMode,
       take: take ? parseInt(take, 10) : undefined,
       skip: skip ? parseInt(skip, 10) : undefined,
     });

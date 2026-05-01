@@ -9,6 +9,7 @@ import { OrdersModule } from './orders/orders.module';
 import { SettingsModule } from './settings/settings.module';
 import { UsersModule } from './users/users.module';
 import { ReviewsModule } from './reviews/reviews.module';
+import { EnquiriesModule } from './enquiries/enquiries.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { ReviewsModule } from './reviews/reviews.module';
     SettingsModule,
     UsersModule,
     ReviewsModule,
+    EnquiriesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

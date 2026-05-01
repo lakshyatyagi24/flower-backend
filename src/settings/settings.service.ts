@@ -2,13 +2,18 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 const DEFAULTS: Record<string, string> = {
-  'store.name': 'Flower Shop',
-  'store.email': 'info@flowershop.com',
-  'store.phone': '+91 99999 11111',
-  'store.address': '123 Flower Street, Mumbai',
-  'shipping.flatRate': '49',
-  'shipping.freeThreshold': '999',
+  'store.name': 'Fresh Petals India',
+  'store.email': 'orders@example.com',
+  'store.phone': '+91 00000 00000',
+  'store.whatsapp': '+91 00000 00000',
+  'store.address': 'Delhi NCR — please update',
+  'store.instagram': '',
+  'store.gstin': '',
+  'shipping.flatRate': '99',
+  'shipping.freeThreshold': '1499',
   'payment.stripeKey': '',
+  'payment.razorpayKeyId': '',
+  'payment.razorpayKeySecret': '',
 };
 
 @Injectable()

@@ -9,46 +9,72 @@ datasource db {
 }
 
 model Category {
-  id        Int       @id @default(autoincrement())
-  name      String
-  slug      String    @unique
-  image     String?
-  parentId  Int?
-  parent    Category? @relation("CategoryChildren", fields: [parentId], references: [id])
-  children  Category[] @relation("CategoryChildren")
-  products  Product[]
+  id              Int         @id @default(autoincrement())
+  name            String
+  slug            String      @unique
+  image           String?
+  description     String?
+  parentId        Int?
+  parent          Category?   @relation("CategoryChildren", fields: [parentId], references: [id])
+  children        Category[]  @relation("CategoryChildren")
+  products        Product[]
+  productType     ProductType @default(CUT_FLOWER)
+  defaultSaleMode SaleMode    @default(PURCHASE)
+  defaultGstRate  Float       @default(0)
+  sortOrder       Int         @default(0)
+  active          Boolean     @default(true)
 }
 
 model Product {
-  id          Int      @id @default(autoincrement())
+  id          Int         @id @default(autoincrement())
   name        String
-  slug        String   @unique
+  slug        String      @unique
   description String?
-  price       Float
+  price       Float       @default(0)
   image       String?
-  stock       Int      @default(0)
-  featured    Boolean  @default(false)
-  active      Boolean  @default(true)
-  category    Category? @relation(fields: [categoryId], references: [id])
+  stock       Int         @default(0)
+  featured    Boolean     @default(false)
+  active      Boolean     @default(true)
+  productType ProductType @default(CUT_FLOWER)
+  saleMode    SaleMode    @default(PURCHASE)
+  gstRate     Float       @default(0)
+  unit        String      @default("piece")
+  minOrderQty Int         @default(1)
+  category    Category?   @relation(fields: [categoryId], references: [id])
   categoryId  Int?
   orderItems  OrderItem[]
   bookings    Booking[]
+  enquiries   Enquiry[]
   reviews     Review[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+enum ProductType {
+  CUT_FLOWER
+  PLANT
+  BOUQUET
+  ARRANGEMENT
+  HAMPER
+}
+
+enum SaleMode {
+  PURCHASE
+  ENQUIRY
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
+  id        Int       @id @default(autoincrement())
   name      String?
-  email     String   @unique
+  email     String    @unique
   password  String
   phone     String?
-  role      UserRole @default(CUSTOMER)
+  role      UserRole  @default(CUSTOMER)
   orders    Order[]
   bookings  Booking[]
+  enquiries Enquiry[]
   reviews   Review[]
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 }
 
 enum UserRole {
@@ -63,6 +89,7 @@ model Order {
   items           OrderItem[]
   subtotal        Float       @default(0)
   shipping        Float       @default(0)
+  gst             Float       @default(0)
   total           Float
   status          OrderStatus @default(PENDING)
   paymentMethod   String      @default("COD")
@@ -86,6 +113,8 @@ model OrderItem {
   productName String
   quantity    Int      @default(1)
   unitPrice   Float
+  gstRate     Float    @default(0)
+  gstAmount   Float    @default(0)
 }
 
 model Setting {
@@ -117,7 +146,7 @@ enum OrderStatus {
 }
 
 model Slider {
-  id        Int      @id @default(autoincrement())
+  id        Int     @id @default(autoincrement())
   title     String?
   eyebrow   String?
   subtitle  String?
@@ -126,8 +155,8 @@ model Slider {
   href      String?
   // Arbitrary JSON configuration for overlay, colors, placement and button
   config    Json?
-  sortOrder Int      @default(0)
-  active    Boolean  @default(true)
+  sortOrder Int     @default(0)
+  active    Boolean @default(true)
 }
 
 enum BookingStatus {
@@ -150,4 +179,38 @@ model Review {
 
   @@unique([productId, userId])
   @@index([productId])
+}
+
+model Enquiry {
+  id            Int           @id @default(autoincrement())
+  user          User?         @relation(fields: [userId], references: [id])
+  userId        Int?
+  product       Product?      @relation(fields: [productId], references: [id])
+  productId     Int?
+  productName   String?
+  customerName  String
+  customerEmail String?
+  customerPhone String
+  quantity      Int?
+  eventDate     DateTime?
+  occasion      String?
+  budget        Float?
+  address       String?
+  city          String?
+  message       String?
+  source        String        @default("website")
+  status        EnquiryStatus @default(NEW)
+  adminNotes    String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([status, createdAt])
+}
+
+enum EnquiryStatus {
+  NEW
+  CONTACTED
+  QUOTED
+  CONVERTED
+  CLOSED
 }
