@@ -39,8 +39,8 @@ export class AuthService {
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       throw new BadRequestException('Valid email is required');
     }
-    if (!input.password || input.password.length < 6) {
-      throw new BadRequestException('Password must be at least 6 characters');
+    if (!input.password || input.password.length < 8) {
+      throw new BadRequestException('Password must be at least 8 characters');
     }
 
     const existing = await this.prisma.user.findUnique({ where: { email } });

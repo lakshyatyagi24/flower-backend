@@ -1,8 +1,13 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { json, urlencoded } from 'express';
+import { assertJwtSecret } from './auth/jwt.util';
 
 async function bootstrap() {
+  // Fail fast at startup if auth is misconfigured, rather than booting with a
+  // missing/weak JWT secret and only erroring on the first token operation.
+  assertJwtSecret();
+
   const app = await NestFactory.create(AppModule);
 
   // Configure body parser for larger payloads (10MB limit)

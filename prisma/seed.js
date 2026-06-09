@@ -25,10 +25,19 @@ function hashPassword(plain) {
 
 async function main() {
   const adminEmail = process.env.SEED_ADMIN_EMAIL || 'admin@flowershop.local';
-  const adminPassword = process.env.SEED_ADMIN_PASSWORD || 'admin1234';
+  const isProd = process.env.NODE_ENV === 'production';
+  // In production a password MUST be supplied explicitly. Only outside
+  // production do we fall back to a well-known dev default for convenience.
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD || (isProd ? null : 'admin1234');
 
   const adminExisting = await prisma.user.findUnique({ where: { email: adminEmail } });
   if (!adminExisting) {
+    if (!adminPassword) {
+      throw new Error(
+        'SEED_ADMIN_PASSWORD must be set to create the admin user when NODE_ENV=production. ' +
+          'Set SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD before seeding a real environment.',
+      );
+    }
     await prisma.user.create({
       data: {
         email: adminEmail,
@@ -37,7 +46,8 @@ async function main() {
         role: 'ADMIN',
       },
     });
-    console.log(`Created admin: ${adminEmail} / ${adminPassword}`);
+    // Never print the password (it lands in deploy logs).
+    console.log(`Created admin: ${adminEmail}`);
   } else if (adminExisting.role !== 'ADMIN') {
     await prisma.user.update({ where: { email: adminEmail }, data: { role: 'ADMIN' } });
     console.log(`Promoted ${adminEmail} to ADMIN`);

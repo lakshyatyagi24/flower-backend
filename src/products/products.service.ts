@@ -48,6 +48,10 @@ function normalizeImageUrl(input?: string | null): string | null {
   let value = String(input).trim();
   if (!value) return null;
 
+  // Inline base64 data URIs — the admin product form uploads images this way
+  // (reader.readAsDataURL). Pass them through untouched instead of nulling them.
+  if (/^data:image\//i.test(value)) return value;
+
   value = value.replace(/\\\//g, '/');
 
   for (let i = 0; i < 2; i += 1) {
@@ -68,6 +72,16 @@ function normalizeImageUrl(input?: string | null): string | null {
   if (value.startsWith('//')) value = `https:${value}`;
   if (/^cdn\.shopify\.com\//i.test(value)) value = `https://${value}`;
   if (/^http:\/\/cdn\.shopify\.com/i.test(value)) value = value.replace(/^http:\/\//i, 'https://');
+
+  // Upgrade bare-http remote hosts to https. The storefront renders images
+  // with next/image, which only whitelists http for localhost; a plain-http
+  // remote URL saves fine but crashes the storefront at render time.
+  if (
+    /^http:\/\//i.test(value) &&
+    !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(value)
+  ) {
+    value = value.replace(/^http:\/\//i, 'https://');
+  }
 
   if (!/^https?:\/\//i.test(value)) return null;
   return value;
@@ -219,6 +233,9 @@ export class ProductsService {
       if (e?.code === 'P2002' && e.meta?.target?.includes?.('slug')) {
         throw new BadRequestException('A product with this slug already exists');
       }
+      if (e?.code === 'P2003') {
+        throw new BadRequestException('Selected category does not exist');
+      }
       throw e;
     }
   }
@@ -260,6 +277,9 @@ export class ProductsService {
     } catch (e: any) {
       if (e?.code === 'P2002' && e.meta?.target?.includes?.('slug')) {
         throw new BadRequestException('A product with this slug already exists');
+      }
+      if (e?.code === 'P2003') {
+        throw new BadRequestException('Selected category does not exist');
       }
       throw e;
     }

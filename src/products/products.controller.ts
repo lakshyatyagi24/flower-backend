@@ -34,8 +34,37 @@ interface ProductBody {
 export class ProductsController {
   constructor(private readonly products: ProductsService) {}
 
+  // Public storefront listing — only ever returns active products. The
+  // `active` query param is intentionally NOT honored here so anonymous
+  // callers cannot enumerate hidden/discontinued products via ?active=false.
   @Get()
   async list(
+    @Query('category') category?: string,
+    @Query('q') q?: string,
+    @Query('featured') featured?: string,
+    @Query('productType') productType?: string,
+    @Query('saleMode') saleMode?: string,
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+  ) {
+    return this.products.list({
+      category,
+      q,
+      featured: featured === undefined ? undefined : featured === 'true',
+      active: true,
+      productType,
+      saleMode,
+      take: take ? parseInt(take, 10) : undefined,
+      skip: skip ? parseInt(skip, 10) : undefined,
+    });
+  }
+
+  // Admin listing — authenticated; can see inactive/soft-disabled products.
+  // active=all (default) → no filter; active=true|false → that filter.
+  @UseGuards(JwtAuthGuard)
+  @Roles('ADMIN')
+  @Get('admin')
+  async listAdmin(
     @Query('category') category?: string,
     @Query('q') q?: string,
     @Query('featured') featured?: string,
@@ -49,7 +78,7 @@ export class ProductsController {
       category,
       q,
       featured: featured === undefined ? undefined : featured === 'true',
-      active: active === undefined ? true : active === 'true',
+      active: active === undefined || active === 'all' ? undefined : active === 'true',
       productType,
       saleMode,
       take: take ? parseInt(take, 10) : undefined,

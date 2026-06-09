@@ -43,8 +43,26 @@ export interface JwtPayload {
   exp: number;
 }
 
+const MIN_SECRET_LENGTH = 32;
+
 function getSecret(): string {
-  return process.env.JWT_SECRET || 'dev-secret-change-me-in-production';
+  const secret = process.env.JWT_SECRET;
+  if (!secret || secret.length < MIN_SECRET_LENGTH) {
+    throw new Error(
+      `JWT_SECRET must be set to a strong random value (at least ${MIN_SECRET_LENGTH} characters). ` +
+        'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'base64url\'))"',
+    );
+  }
+  return secret;
+}
+
+/**
+ * Validate auth configuration at startup so the app fails fast (and loudly)
+ * instead of booting with a missing/weak secret and only erroring on the
+ * first token operation. Call this from bootstrap.
+ */
+export function assertJwtSecret(): void {
+  getSecret();
 }
 
 export function signJwt(

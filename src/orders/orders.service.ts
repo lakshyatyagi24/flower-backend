@@ -26,6 +26,17 @@ interface CreateOrderInput {
 const ALLOWED_STATUSES = ['PENDING', 'PAID', 'SHIPPED', 'COMPLETED', 'CANCELLED'] as const;
 type OrderStatus = (typeof ALLOWED_STATUSES)[number];
 
+// Legal forward transitions. COMPLETED and CANCELLED are terminal. This keeps
+// the customer-facing tracking timeline coherent and lets cancellation restock
+// exactly once (you cannot resurrect a CANCELLED order and re-cancel it).
+const STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  PENDING: ['PAID', 'SHIPPED', 'CANCELLED'],
+  PAID: ['SHIPPED', 'COMPLETED', 'CANCELLED'],
+  SHIPPED: ['COMPLETED', 'CANCELLED'],
+  COMPLETED: [],
+  CANCELLED: [],
+};
+
 @Injectable()
 export class OrdersService {
   constructor(private readonly prisma: PrismaService) {}
@@ -96,8 +107,12 @@ export class OrdersService {
         throw new BadRequestException(`"${product.name}" is enquiry-only — please send an enquiry instead`);
       }
       const qty = Math.max(product.minOrderQty || 1, Math.floor(it.quantity || 1));
-      if (product.stock > 0 && qty > product.stock) {
-        throw new BadRequestException(`Only ${product.stock} of "${product.name}" available`);
+      if (qty > product.stock) {
+        throw new BadRequestException(
+          product.stock <= 0
+            ? `"${product.name}" is out of stock`
+            : `Only ${product.stock} of "${product.name}" available`,
+        );
       }
       const lineTotal = product.price * qty;
       const gstRate = product.gstRate || 0;
@@ -120,7 +135,34 @@ export class OrdersService {
     const gst = +gstTotal.toFixed(2);
     const total = +(subtotal + shipping + gst).toFixed(2);
 
+    // For a logged-in buyer, bind the order's tracking email to their account
+    // email so ownership (userId) and the email-based tracking key cannot diverge.
+    let customerEmail = input.customerEmail.trim().toLowerCase();
+    if (userId) {
+      const account = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { email: true },
+      });
+      if (account?.email) customerEmail = account.email.trim().toLowerCase();
+    }
+
     return this.prisma.$transaction(async (tx) => {
+      // Atomically claim stock BEFORE creating the order. updateMany with a
+      // `stock >= qty` guard serializes concurrent buyers — if another order
+      // took the last units between our snapshot and now, count is 0 and we
+      // roll back instead of overselling into negative stock.
+      for (const it of itemRows) {
+        const claimed = await tx.product.updateMany({
+          where: { id: it.productId, stock: { gte: it.quantity } },
+          data: { stock: { decrement: it.quantity } },
+        });
+        if (claimed.count === 0) {
+          throw new BadRequestException(
+            `"${it.productName}" just went out of stock — please adjust your cart and try again`,
+          );
+        }
+      }
+
       const order = await tx.order.create({
         data: {
           userId: userId ?? null,
@@ -131,7 +173,7 @@ export class OrdersService {
           status: 'PENDING',
           paymentMethod: input.paymentMethod || 'COD',
           customerName: input.customerName.trim(),
-          customerEmail: input.customerEmail.trim().toLowerCase(),
+          customerEmail,
           customerPhone: input.customerPhone?.trim() || null,
           shippingAddress: input.shippingAddress.trim(),
           city: input.city?.trim() || null,
@@ -141,17 +183,6 @@ export class OrdersService {
         },
         include: this.include,
       });
-
-      // Decrement stock for tracked products
-      for (const it of itemRows) {
-        const p = productMap.get(it.productId)!;
-        if (p.stock > 0) {
-          await tx.product.update({
-            where: { id: p.id },
-            data: { stock: { decrement: it.quantity } },
-          });
-        }
-      }
 
       return order;
     });
@@ -174,9 +205,10 @@ export class OrdersService {
 
   async track(id: number, email: string) {
     const order = await this.prisma.order.findUnique({ where: { id }, include: this.include });
-    if (!order) throw new NotFoundException('Order not found');
-    if (!email || order.customerEmail?.toLowerCase() !== email.trim().toLowerCase()) {
-      throw new ForbiddenException('Email does not match this order');
+    // Single generic error for both "no such order" and "email mismatch" so
+    // sequential order IDs can't be enumerated via 404-vs-403 responses.
+    if (!order || !email || order.customerEmail?.toLowerCase() !== email.trim().toLowerCase()) {
+      throw new NotFoundException('Order not found, or the email does not match this order');
     }
     // Strip internal-only fields before returning to the public tracking endpoint.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -210,16 +242,45 @@ export class OrdersService {
     return order;
   }
 
+  private assertTransition(from: OrderStatus, to: OrderStatus) {
+    if (from === to) return;
+    if (!STATUS_TRANSITIONS[from].includes(to)) {
+      throw new BadRequestException(`Cannot change order status from ${from} to ${to}`);
+    }
+  }
+
   async updateStatus(id: number, status: string) {
     if (!(ALLOWED_STATUSES as readonly string[]).includes(status)) {
       throw new BadRequestException('Invalid status');
     }
     const existing = await this.prisma.order.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Order not found');
-    return this.prisma.order.update({
-      where: { id },
-      data: { status: status as OrderStatus },
-      include: this.include,
+    const from = existing.status as OrderStatus;
+    const to = status as OrderStatus;
+    if (from === to) return this.getOne(id);
+    this.assertTransition(from, to);
+
+    return this.prisma.$transaction(async (tx) => {
+      if (to === 'CANCELLED') {
+        // Restore reserved stock exactly once on cancellation.
+        const items = await tx.orderItem.findMany({
+          where: { orderId: id },
+          select: { productId: true, quantity: true },
+        });
+        for (const it of items) {
+          if (it.productId) {
+            await tx.product.update({
+              where: { id: it.productId },
+              data: { stock: { increment: it.quantity } },
+            });
+          }
+        }
+      }
+      return tx.order.update({
+        where: { id },
+        data: { status: to },
+        include: this.include,
+      });
     });
   }
 
@@ -244,11 +305,20 @@ export class OrdersService {
     if (!existing) throw new NotFoundException('Order not found');
 
     const data: Record<string, unknown> = {};
+    let restockOnCancel = false;
     if (patch.status !== undefined) {
       if (!(ALLOWED_STATUSES as readonly string[]).includes(patch.status)) {
         throw new BadRequestException('Invalid status');
       }
-      data.status = patch.status as OrderStatus;
+      const from = existing.status as OrderStatus;
+      const to = patch.status as OrderStatus;
+      // Only treat it as a transition when the status actually changes, so an
+      // admin can edit tracking/notes without re-validating an unchanged status.
+      if (from !== to) {
+        this.assertTransition(from, to);
+        data.status = to;
+        restockOnCancel = to === 'CANCELLED';
+      }
     }
     if (patch.trackingNumber !== undefined) data.trackingNumber = patch.trackingNumber || null;
     if (patch.courierName !== undefined) data.courierName = patch.courierName || null;
@@ -258,10 +328,26 @@ export class OrdersService {
     if (patch.postalCode !== undefined) data.postalCode = patch.postalCode || null;
     if (patch.customerPhone !== undefined) data.customerPhone = patch.customerPhone || null;
 
-    return this.prisma.order.update({
-      where: { id },
-      data,
-      include: this.include,
+    return this.prisma.$transaction(async (tx) => {
+      if (restockOnCancel) {
+        const items = await tx.orderItem.findMany({
+          where: { orderId: id },
+          select: { productId: true, quantity: true },
+        });
+        for (const it of items) {
+          if (it.productId) {
+            await tx.product.update({
+              where: { id: it.productId },
+              data: { stock: { increment: it.quantity } },
+            });
+          }
+        }
+      }
+      return tx.order.update({
+        where: { id },
+        data,
+        include: this.include,
+      });
     });
   }
 

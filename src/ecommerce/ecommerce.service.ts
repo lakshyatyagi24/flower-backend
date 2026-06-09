@@ -195,7 +195,7 @@ export class EcommerceService {
   async getSliders(includeInactive: boolean = false) {
     return this.prisma.slider.findMany({
       where: includeInactive ? {} : { active: true },
-      orderBy: { sortOrder: 'asc' },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
       select: {
         id: true,
         title: true,
@@ -268,13 +268,8 @@ export class EcommerceService {
       data.sortOrder = maxSort + 1;
     }
 
-    // Validate sortOrder uniqueness
-    const existingSlider = await this.prisma.slider.findFirst({
-      where: { sortOrder: data.sortOrder },
-    });
-    if (existingSlider) {
-      throw new BadRequestException(`A slider with sort order ${data.sortOrder} already exists. Please choose a different sort order.`);
-    }
+    // sortOrder is intentionally not unique — see updateSlider. Ordering is
+    // stabilized by an id tiebreak in getSliders().
 
     try {
       return await this.prisma.slider.create({
@@ -340,15 +335,10 @@ export class EcommerceService {
       }
     }
 
-    // Validate sortOrder uniqueness if being updated
-    if (data.sortOrder !== undefined && data.sortOrder !== existingSlider.sortOrder) {
-      const conflictingSlider = await this.prisma.slider.findFirst({
-        where: { sortOrder: data.sortOrder },
-      });
-      if (conflictingSlider) {
-        throw new BadRequestException('A slider with this sort order already exists');
-      }
-    }
+    // NOTE: sortOrder is intentionally NOT unique. The admin reorder feature
+    // swaps two sliders' sortOrder values with two parallel updates; a
+    // uniqueness guard here made every swap fail. Ties are broken by id in
+    // getSliders(), so transient/duplicate sortOrders are harmless.
 
     try {
       return await this.prisma.slider.update({

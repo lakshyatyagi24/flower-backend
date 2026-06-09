@@ -27,13 +27,28 @@ export class SettingsService {
     return result;
   }
 
+  // Allowlist of key prefixes that are safe to expose to unauthenticated
+  // storefront clients. Anything not matching (e.g. payment.*, future
+  // mail.*/sms.* credentials) is withheld by default — an allowlist fails
+  // closed, unlike a denylist that leaks any newly-added secret namespace.
+  private static readonly PUBLIC_PREFIXES = [
+    'store.',
+    'social.',
+    'homepage.',
+    'trust.',
+    'delivery.',
+    'policies.',
+    'shipping.',
+    'seo.',
+  ];
+
   async getPublic(): Promise<Record<string, string>> {
     const all = await this.getAll();
-    // Strip secrets — never expose payment keys to non-admin clients
     const out: Record<string, string> = {};
     for (const [k, v] of Object.entries(all)) {
-      if (k.startsWith('payment.')) continue;
-      out[k] = v;
+      if (SettingsService.PUBLIC_PREFIXES.some((p) => k.startsWith(p))) {
+        out[k] = v;
+      }
     }
     return out;
   }
