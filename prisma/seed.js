@@ -131,8 +131,8 @@ async function main() {
   const defaultSettings = {
     'store.name': 'Fresh Petals India',
     'store.email': 'orders@example.com',
-    'store.phone': '+91 00000 00000',
-    'store.whatsapp': '+91 00000 00000',
+    'store.phone': '+91 93540 16059',
+    'store.whatsapp': '+91 93540 16059',
     'store.address': 'Delhi NCR — please update with real address',
     'store.instagram': '',
     'store.gstin': '',

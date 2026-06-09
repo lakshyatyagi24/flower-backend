@@ -4,8 +4,8 @@ import { PrismaService } from '../prisma/prisma.service';
 const DEFAULTS: Record<string, string> = {
   'store.name': 'Fresh Petals India',
   'store.email': 'orders@example.com',
-  'store.phone': '+91 00000 00000',
-  'store.whatsapp': '+91 00000 00000',
+  'store.phone': '+91 93540 16059',
+  'store.whatsapp': '+91 93540 16059',
   'store.address': 'Delhi NCR — please update',
   'store.instagram': '',
   'store.gstin': '',
