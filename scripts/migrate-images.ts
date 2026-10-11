@@ -1,8 +1,17 @@
 /**
  * Image migration (Task 1.6).
  *
+ * Local dev (from flower-backend/):
  *   npm run images:migrate -- --dry   # no Cloudinary calls, no DB writes
  *   npm run images:migrate            # real run (needs CLOUDINARY_* env)
+ *
+ * Production (runtime image has only dist/, node_modules/, prisma/; no ts-node):
+ *   cd /app/backend && node dist/scripts/migrate-images.js --dry
+ *   cd /app/backend && node dist/scripts/migrate-images.js
+ * Real (non --dry) runs need CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET in the
+ * container env and should be preceded by a DB backup (pg_dump).
+ * The manifest is read from <cwd>/prisma/data/interim-images.json, so always
+ * run from the backend root.
  *
  * Products: data: URIs -> Cloudinary; res.cloudinary.com -> skipped; anything
  * else (Shopify, http, null...) -> interim royalty-free photo by name rule, or
@@ -12,18 +21,21 @@
  * Idempotent: rows already holding their target value are left untouched.
  */
 import 'dotenv/config';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { v2 as cloudinary } from 'cloudinary';
-import { PrismaClient } from '../prisma/generated/prisma';
+import type { PrismaClient as PrismaClientType } from '../prisma/generated/prisma';
 import { InterimManifest, matchKey } from '../src/catalog/image-rules';
 
 const CLD = 'https://res.cloudinary.com/';
 const dry = process.argv.includes('--dry');
 
-const manifest: InterimManifest = JSON.parse(
-  readFileSync(join(__dirname, '../prisma/data/interim-images.json'), 'utf8'),
-);
+const manifestPath = join(process.cwd(), 'prisma/data/interim-images.json');
+if (!existsSync(manifestPath)) {
+  console.error(`Manifest not found: ${manifestPath}. Run from the backend root (the dir containing prisma/).`);
+  process.exit(1);
+}
+const manifest: InterimManifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 
 if (!dry) {
   const missing = ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'].filter(
@@ -41,6 +53,9 @@ if (!dry) {
   });
 }
 
+// Same resolution as src/prisma/prisma.service.ts: generated client under <cwd>/prisma/generated/prisma.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const PrismaClient: typeof PrismaClientType = require(join(process.cwd(), 'prisma/generated/prisma')).PrismaClient;
 const prisma = new PrismaClient();
 const interimCache: Record<string, string> = {};
 

@@ -96,7 +96,8 @@
       "source": "https://www.pexels.com/photo/bunch-roses-against-pink-background-16244993/",
       "file": "https://images.pexels.com/photos/16244993/pexels-photo-16244993.jpeg?auto=compress&cs=tinysrgb&w=1600",
       "photographer": "Esra Erdem",
-      "photographerUrl": "https://www.pexels.com/@esrakorkmaz/"
+      "photographerUrl": "https://www.pexels.com/@esrakorkmaz/",
+      "description": "Pink carnations on a pink background (the Pexels page slug says 'roses' but the photo shows carnations)."
     },
     "gladioli": {
       "source": "https://www.pexels.com/photo/close-up-of-pink-gladiolus-17745159/",
