@@ -14,6 +14,7 @@ import { MailModule } from './mail/mail.module';
 import { HealthController } from './health/health.controller';
 import { UploadsModule } from './uploads/uploads.module';
 import { NewsletterModule } from './newsletter/newsletter.module';
+import { PaymentsModule } from './payments/payments.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { NewsletterModule } from './newsletter/newsletter.module';
     EnquiriesModule,
     UploadsModule,
     NewsletterModule,
+    PaymentsModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
