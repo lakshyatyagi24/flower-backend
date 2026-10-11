@@ -44,6 +44,44 @@ describe('OrdersService mail hooks', () => {
     expect(mail.sendOrderPlaced).toHaveBeenCalledWith(created);
   });
 
+  it('create does NOT send order-placed for a RAZORPAY order (unpaid until verified)', async () => {
+    const { svc, mail } = makeFakes();
+    await svc.create(null, { ...input, paymentMethod: 'RAZORPAY' });
+    expect(mail.sendOrderPlaced).not.toHaveBeenCalled();
+  });
+
+  it('create still sends order-placed for an explicit COD order', async () => {
+    const { svc, mail } = makeFakes();
+    await svc.create(null, { ...input, paymentMethod: 'COD' });
+    expect(mail.sendOrderPlaced).toHaveBeenCalledTimes(1);
+  });
+
+  it('track strips internal and payment reference fields from the public response', async () => {
+    const { svc, prisma } = makeFakes();
+    prisma.order.findUnique.mockResolvedValue({
+      id: 5, customerEmail: 'c@x.com', adminNotes: 'secret', razorpayOrderId: 'order_1',
+      razorpayPaymentId: 'pay_1', refundNote: 'refund me', paymentStatus: 'PAID', status: 'PAID', items: [],
+    });
+    const res: any = await svc.track(5, 'C@x.com');
+    expect(res).not.toHaveProperty('adminNotes');
+    expect(res).not.toHaveProperty('razorpayOrderId');
+    expect(res).not.toHaveProperty('razorpayPaymentId');
+    expect(res).not.toHaveProperty('refundNote');
+    expect(res.paymentStatus).toBe('PAID');
+  });
+
+  it('getMine and listMine never expose refundNote but keep razorpayOrderId', async () => {
+    const { svc, prisma } = makeFakes();
+    const row = { id: 5, userId: 9, razorpayOrderId: 'order_1', refundNote: 'x', items: [] };
+    prisma.order.findUnique.mockResolvedValue(row);
+    prisma.order.findMany = jest.fn(async () => [row]);
+    const one: any = await svc.getMine(9, 5);
+    expect(one).not.toHaveProperty('refundNote');
+    expect(one.razorpayOrderId).toBe('order_1');
+    const list: any = await svc.listMine(9);
+    expect(list[0]).not.toHaveProperty('refundNote');
+  });
+
   it('create does not fail when the mail promise rejects', async () => {
     const { svc, mail } = makeFakes();
     mail.sendOrderPlaced.mockRejectedValue(new Error('boom'));

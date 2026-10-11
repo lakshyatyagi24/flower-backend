@@ -75,6 +75,45 @@ describe('MailService', () => {
     expect(html).not.toContain('shop.test//');
   });
 
+  describe('sendOrderPaid', () => {
+    const paidOrder = () => ({
+      id: 7, total: 1, subtotal: 1, shipping: 0, gst: 0, paymentMethod: 'RAZORPAY', customerEmail: 'c@x.com',
+      customerName: 'C', shippingAddress: 'a', city: 'b', postalCode: '1', items: [] as any,
+    });
+    const mk = (send: jest.Mock, admin: string) => {
+      const svc = new MailService();
+      (svc as any).client = { emails: { send } };
+      (svc as any).admin = admin;
+      return svc;
+    };
+
+    it('notifies both customer and admin', async () => {
+      const send = jest.fn(async () => ({ data: {}, error: null }));
+      await mk(send, 'admin@x.com').sendOrderPaid(paidOrder());
+      expect(send.mock.calls.map((c: any) => c[0].to)).toEqual(['c@x.com', 'admin@x.com']);
+    });
+
+    it('skips the admin mail when ADMIN_NOTIFY_EMAIL is empty', async () => {
+      const send = jest.fn(async () => ({ data: {}, error: null }));
+      await mk(send, '').sendOrderPaid(paidOrder());
+      expect(send.mock.calls.map((c: any) => c[0].to)).toEqual(['c@x.com']);
+    });
+
+    it('customer failure does not stop the admin mail, and vice versa', async () => {
+      const o2: any = paidOrder();
+      let n = 0;
+      Object.defineProperty(o2, 'items', { get() { if (++n === 2) throw new Error('admin only'); return []; } });
+      const send2 = jest.fn(async () => ({ data: {}, error: null }));
+      await mk(send2, 'admin@x.com').sendOrderPaid(o2);
+      expect(send2.mock.calls.map((c: any) => c[0].to)).toEqual(['c@x.com']);
+
+      const send3 = jest.fn(async () => ({ data: {}, error: null }));
+      send3.mockImplementationOnce(async () => { throw new Error('provider down'); });
+      await expect(mk(send3, 'admin@x.com').sendOrderPaid(paidOrder())).resolves.toBeUndefined();
+      expect(send3.mock.calls.map((c: any) => c[0].to)).toEqual(['c@x.com', 'admin@x.com']);
+    });
+  });
+
   describe('template failures never throw or reject', () => {
     const order = (over: any = {}) => ({
       id: 7, total: 1, subtotal: 1, shipping: 0, gst: 0, paymentMethod: 'COD', customerEmail: 'c@x.com',

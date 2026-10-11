@@ -188,24 +188,36 @@ export class OrdersService {
 
       return order;
     });
-    // Fire-and-forget: mail must never fail or slow the request.
-    void this.mail.sendOrderPlaced(created).catch(() => undefined);
-    return created;
+    // Fire-and-forget: mail must never fail or slow the request. Online-payment
+    // orders are unpaid at creation, so they are announced on capture instead
+    // (PaymentsService.markPaid -> sendOrderPaid).
+    if ((input.paymentMethod || 'COD') !== 'RAZORPAY') {
+      void this.mail.sendOrderPlaced(created).catch(() => undefined);
+    }
+    return this.forCustomer(created);
+  }
+
+  /** refundNote is owner-only bookkeeping; never returned to customer-facing endpoints. */
+  private forCustomer<T extends { refundNote?: unknown }>(order: T): Omit<T, 'refundNote'> {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { refundNote: _refundNote, ...rest } = order;
+    return rest;
   }
 
   async listMine(userId: number) {
-    return this.prisma.order.findMany({
+    const rows = await this.prisma.order.findMany({
       where: { userId },
       include: this.include,
       orderBy: { createdAt: 'desc' },
     });
+    return rows.map((r: { refundNote?: unknown }) => this.forCustomer(r));
   }
 
   async getMine(userId: number, id: number) {
     const order = await this.prisma.order.findUnique({ where: { id }, include: this.include });
     if (!order) throw new NotFoundException('Order not found');
     if (order.userId !== userId) throw new ForbiddenException('Not your order');
-    return order;
+    return this.forCustomer(order);
   }
 
   async track(id: number, email: string) {
@@ -217,7 +229,7 @@ export class OrdersService {
     }
     // Strip internal-only fields before returning to the public tracking endpoint.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { adminNotes: _adminNotes, ...publicOrder } = order;
+    const { adminNotes: _a, refundNote: _r, razorpayOrderId: _o, razorpayPaymentId: _p, ...publicOrder } = order;
     return publicOrder;
   }
 

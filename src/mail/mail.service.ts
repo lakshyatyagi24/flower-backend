@@ -54,7 +54,10 @@ export class MailService {
     await this.deliver(this.admin, `New order #${o.id}`, () => T.adminOrderHtml(o, this.adminSite));
   }
   async sendOrderPaid(o: Parameters<typeof T.orderPaidHtml>[0] & { customerEmail: string | null }): Promise<void> {
+    // Online orders skip the placed mail, so the admin hears about them here.
+    // Independent: a failure on one mail never stops the other.
     await this.deliver(o.customerEmail ?? '', `Payment received for order #${o.id}`, () => T.orderPaidHtml(o, this.site));
+    await this.deliver(this.admin, `New paid order #${o.id}`, () => T.adminOrderHtml(o, this.adminSite));
   }
   async sendOrderShipped(o: Parameters<typeof T.orderShippedHtml>[0] & { customerEmail: string | null }): Promise<void> {
     await this.deliver(o.customerEmail ?? '', `Order #${o.id} is on its way`, () => T.orderShippedHtml(o, this.site));

@@ -83,6 +83,13 @@ enum UserRole {
   ADMIN
 }
 
+enum PaymentStatus {
+  UNPAID
+  PAID
+  FAILED
+  REFUNDED
+}
+
 model Order {
   id              Int         @id @default(autoincrement())
   user            User?       @relation(fields: [userId], references: [id])
@@ -106,6 +113,13 @@ model Order {
   courierName     String?
   // Internal-only â€” admin scratchpad, never returned to customers.
   adminNotes      String?
+  // Online payment state. COD stays UNPAID until the admin completes the order.
+  paymentStatus     PaymentStatus @default(UNPAID)
+  razorpayOrderId   String?       @unique
+  razorpayPaymentId String?       @unique
+  paidAt            DateTime?
+  // Internal-only (manual refund bookkeeping) — never returned to customers.
+  refundNote        String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 }
