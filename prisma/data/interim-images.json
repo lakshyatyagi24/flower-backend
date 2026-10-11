@@ -1,0 +1,162 @@
+{
+  "licence": "Pexels License (free for commercial use, no attribution required) - https://www.pexels.com/license/",
+  "note": "Interim placeholder photos until the owner supplies real product photography. Rules are evaluated in order; most specific first (tuberose before rose).",
+  "rules": [
+    {
+      "match": "tube ?rose|rajnigandha|tuberose",
+      "key": "tuberose"
+    },
+    {
+      "match": "santini",
+      "key": "chrysanthemum"
+    },
+    {
+      "match": "chrysanthemum",
+      "key": "chrysanthemum"
+    },
+    {
+      "match": "rose",
+      "key": "rose"
+    },
+    {
+      "match": "orchid",
+      "key": "orchid"
+    },
+    {
+      "match": "lily|lilies",
+      "key": "lily"
+    },
+    {
+      "match": "carnation",
+      "key": "carnation"
+    },
+    {
+      "match": "gladiol",
+      "key": "gladioli"
+    },
+    {
+      "match": "sunflower",
+      "key": "sunflower"
+    },
+    {
+      "match": "anthurium",
+      "key": "anthurium"
+    },
+    {
+      "match": "lisianthus",
+      "key": "lisianthus"
+    },
+    {
+      "match": "gerbera",
+      "key": "gerbera"
+    },
+    {
+      "match": "liatris",
+      "key": "liatris"
+    },
+    {
+      "match": "hydrangea",
+      "key": "hydrangea"
+    },
+    {
+      "match": "tulip",
+      "key": "tulip"
+    },
+    {
+      "match": "eucalyptus|fillers|foliage",
+      "key": "foliage"
+    }
+  ],
+  "images": {
+    "rose": {
+      "source": "https://www.pexels.com/photo/bouquets-of-red-roses-in-close-up-photography-13306125/",
+      "file": "https://images.pexels.com/photos/13306125/pexels-photo-13306125.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "Stuti .....",
+      "photographerUrl": "https://www.pexels.com/@stuti/"
+    },
+    "chrysanthemum": {
+      "source": "https://www.pexels.com/photo/vibrant-pink-chrysanthemums-in-bloom-34643064/",
+      "file": "https://images.pexels.com/photos/34643064/pexels-photo-34643064.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "浪 郭",
+      "photographerUrl": "https://www.pexels.com/@2150004161/"
+    },
+    "orchid": {
+      "source": "https://www.pexels.com/photo/close-up-of-purple-flowers-19838583/",
+      "file": "https://images.pexels.com/photos/19838583/pexels-photo-19838583.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "Suki Lee",
+      "photographerUrl": "https://www.pexels.com/@suki-lee-110686949/"
+    },
+    "lily": {
+      "source": "https://www.pexels.com/photo/close-up-shot-of-lilies-13019690/",
+      "file": "https://images.pexels.com/photos/13019690/pexels-photo-13019690.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "Hatice Baran",
+      "photographerUrl": "https://www.pexels.com/@hatice-baran-153179658/"
+    },
+    "carnation": {
+      "source": "https://www.pexels.com/photo/bunch-roses-against-pink-background-16244993/",
+      "file": "https://images.pexels.com/photos/16244993/pexels-photo-16244993.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "Esra Erdem",
+      "photographerUrl": "https://www.pexels.com/@esrakorkmaz/"
+    },
+    "gladioli": {
+      "source": "https://www.pexels.com/photo/close-up-of-pink-gladiolus-17745159/",
+      "file": "https://images.pexels.com/photos/17745159/pexels-photo-17745159.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "Vladimir Srajber",
+      "photographerUrl": "https://www.pexels.com/@vladimirsrajber/"
+    },
+    "sunflower": {
+      "source": "https://www.pexels.com/photo/close-up-of-vibrant-sunflower-in-full-bloom-34537622/",
+      "file": "https://images.pexels.com/photos/34537622/pexels-photo-34537622.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "F 植生记",
+      "photographerUrl": "https://www.pexels.com/@f-2154796291/"
+    },
+    "anthurium": {
+      "source": "https://www.pexels.com/photo/red-anthuriums-flowers-with-green-leaves-8458247/",
+      "file": "https://images.pexels.com/photos/8458247/pexels-photo-8458247.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "Maria Tyutina",
+      "photographerUrl": "https://www.pexels.com/@mtyutina/"
+    },
+    "lisianthus": {
+      "source": "https://www.pexels.com/photo/close-up-of-pink-lisianthus-flowers-in-bloom-39483267/",
+      "file": "https://images.pexels.com/photos/39483267/pexels-photo-39483267.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "Jobayer Ahmed",
+      "photographerUrl": "https://www.pexels.com/@jobayer-ahmed-2149814392/"
+    },
+    "tuberose": {
+      "source": "https://www.pexels.com/photo/blooming-tuberose-flowers-in-nature-18708239/",
+      "file": "https://images.pexels.com/photos/18708239/pexels-photo-18708239.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "Pupun Patra",
+      "photographerUrl": "https://www.pexels.com/@pupun-patra-1283278/"
+    },
+    "gerbera": {
+      "source": "https://www.pexels.com/photo/red-gerberas-in-a-glass-vase-11563147/",
+      "file": "https://images.pexels.com/photos/11563147/pexels-photo-11563147.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "Céline",
+      "photographerUrl": "https://www.pexels.com/@celine-3776818/"
+    },
+    "liatris": {
+      "source": "https://www.pexels.com/photo/vibrant-purple-liatris-flowers-in-bloom-outdoors-32952972/",
+      "file": "https://images.pexels.com/photos/32952972/pexels-photo-32952972.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "ANOOG RUBIN KADAM",
+      "photographerUrl": "https://www.pexels.com/@anokrubun/"
+    },
+    "hydrangea": {
+      "source": "https://www.pexels.com/photo/vibrant-blue-hydrangea-flower-in-bloom-37130910/",
+      "file": "https://images.pexels.com/photos/37130910/pexels-photo-37130910.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "Pew Nguyen",
+      "photographerUrl": "https://www.pexels.com/@nguyendesigner/"
+    },
+    "tulip": {
+      "source": "https://www.pexels.com/photo/red-tulips-in-close-up-photography-11319989/",
+      "file": "https://images.pexels.com/photos/11319989/pexels-photo-11319989.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "Bette Jo Garrett",
+      "photographerUrl": "https://www.pexels.com/@bette-jo-garrett-162808425/"
+    },
+    "foliage": {
+      "source": "https://www.pexels.com/photo/a-branch-of-eucalyptus-plant-in-white-background-6168330/",
+      "file": "https://images.pexels.com/photos/6168330/pexels-photo-6168330.jpeg?auto=compress&cs=tinysrgb&w=1600",
+      "photographer": "Vie Studio",
+      "photographerUrl": "https://www.pexels.com/@vie-studio/"
+    }
+  }
+}

@@ -64,7 +64,8 @@ const FEATURED_BY_HANDLE_COLOR = new Map([
 const cutFlowerCategory = {
   name: 'Cut Flowers',
   slug: 'cut-flowers',
-  image: 'https://cdn.shopify.com/s/files/1/0047/4637/9362/files/IMG_4116-3.jpg?v=1697649468',
+  // No third-party hotlinks: category image is set via the admin/Cloudinary.
+  image: null,
   description: 'Farm-fresh cut flowers sourced daily from the mandi. Bulk and corporate-friendly pricing.',
   productType: 'CUT_FLOWER',
   defaultSaleMode: 'PURCHASE',
@@ -187,6 +188,11 @@ function normalizeImageUrl(input) {
   return value;
 }
 
+// Never let another company's Shopify CDN URLs enter our DB (hotlinks).
+function isShopifyUrl(u) {
+  return typeof u === 'string' && /(^|\/\/)cdn\.shopify\.com/i.test(u);
+}
+
 function pickImageSrc(product, variant) {
   let src = null;
   if (variant && variant.featured_image && variant.featured_image.src) {
@@ -194,7 +200,8 @@ function pickImageSrc(product, variant) {
   } else if (Array.isArray(product.images) && product.images[0] && product.images[0].src) {
     src = product.images[0].src;
   }
-  return normalizeImageUrl(src);
+  const url = normalizeImageUrl(src);
+  return isShopifyUrl(url) ? null : url;
 }
 
 function productNameWithColor(productTitle, color) {
@@ -267,7 +274,7 @@ async function seedCutFlowers(prisma) {
     create: cutFlowerCategory,
     update: {
       name: cutFlowerCategory.name,
-      image: cutFlowerCategory.image,
+      // image intentionally NOT updated — preserve any Cloudinary image set later.
       description: cutFlowerCategory.description,
       productType: cutFlowerCategory.productType,
       defaultSaleMode: cutFlowerCategory.defaultSaleMode,
@@ -294,6 +301,11 @@ async function seedCutFlowers(prisma) {
       unit: 'stem',
       minOrderQty: 1,
     };
+    const existing = await prisma.product.findUnique({
+      where: { slug: p.slug },
+      select: { image: true },
+    });
+    const keepImage = existing && existing.image;
     await prisma.product.upsert({
       where: { slug: p.slug },
       create: data,
@@ -302,7 +314,8 @@ async function seedCutFlowers(prisma) {
         description: data.description,
         price: data.price,
         featured: data.featured,
-        image: data.image,
+        // image only written when we have one AND the row has none (never clobber a live image).
+        ...(keepImage || !data.image ? {} : { image: data.image }),
         categoryId: data.categoryId,
         productType: data.productType,
         saleMode: data.saleMode,
@@ -321,4 +334,6 @@ module.exports = {
   seedCutFlowers,
   // exported for unit/manual inspection
   transformSnapshot,
+  isShopifyUrl,
+  pickImageSrc,
 };
