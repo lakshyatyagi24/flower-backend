@@ -1,12 +1,18 @@
 import { PartialType } from '@nestjs/mapped-types';
-import { IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, MaxLength, Min } from 'class-validator';
 
 export class CreateProductDto {
   @IsString() @MaxLength(120) name!: string;
   @IsOptional() @IsString() @MaxLength(140) slug?: string;
   @IsOptional() @IsString() @MaxLength(5000) description?: string;
   @IsNumber() @Min(0) price!: number;
-  @IsOptional() @IsString() @MaxLength(2048) image?: string;
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  @Matches(/^(https:\/\/res\.cloudinary\.com\/|\/(?!\/))/, {
+    message: 'Image must be an uploaded image (Cloudinary) or a site-relative path',
+  })
+  image?: string;
   @IsOptional() @IsInt() @Min(0) stock?: number;
   @IsOptional() @IsBoolean() featured?: boolean;
   @IsOptional() @IsBoolean() active?: boolean;

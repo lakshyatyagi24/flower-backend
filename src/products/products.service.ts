@@ -52,6 +52,9 @@ function normalizeImageUrl(input?: string | null): string | null {
   // (reader.readAsDataURL). Pass them through untouched instead of nulling them.
   if (/^data:image\//i.test(value)) return value;
 
+  // Site-relative paths (e.g. /images/x.jpg) are valid storefront images; keep them.
+  if (/^\/(?!\/)/.test(value)) return value;
+
   value = value.replace(/\\\//g, '/');
 
   for (let i = 0; i < 2; i += 1) {
