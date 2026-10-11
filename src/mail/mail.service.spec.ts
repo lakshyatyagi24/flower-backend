@@ -74,4 +74,56 @@ describe('MailService', () => {
     expect(html).toContain('https://shop.test/track-order');
     expect(html).not.toContain('shop.test//');
   });
+
+  describe('template failures never throw or reject', () => {
+    const order = (over: any = {}) => ({
+      id: 7, total: 1, subtotal: 1, shipping: 0, gst: 0, paymentMethod: 'COD', customerEmail: 'c@x.com',
+      customerName: 'C', shippingAddress: 'a', city: 'b', postalCode: '1', items: [], ...over,
+    });
+    const trap = <T extends object>(o: T, key: string): T => {
+      Object.defineProperty(o, key, { get() { throw new Error('tpl boom'); } });
+      return o;
+    };
+    const cases: [string, (s: MailService) => any][] = [
+      ['sendPasswordReset', (s) => s.sendPasswordReset('a@b.com', { toString() { throw new Error('tpl boom'); } } as any)],
+      ['sendOrderPlaced', (s) => s.sendOrderPlaced(order({ items: undefined }))],
+      ['sendOrderPaid', (s) => s.sendOrderPaid(order({ items: undefined }))],
+      ['sendOrderShipped', (s) => s.sendOrderShipped(trap(order({ trackingNumber: 'T' }), 'customerName'))],
+      ['sendEnquiryReceived', (s) => s.sendEnquiryReceived(trap({ id: 1, customerPhone: '1', customerEmail: 'e@x.com', productName: null, quantity: null, message: null, city: null, customerName: 'x' }, 'customerName') as any)],
+      ['sendNewsletterWelcome', (s) => { (s as any).site = { replace() { throw new Error('tpl boom'); } }; return s.sendNewsletterWelcome('n@x.com'); }],
+    ];
+    it.each(cases)('%s', async (_n, call) => {
+      for (const withClient_ of [false, true]) {
+        errSpy.mockClear();
+        const send = jest.fn(async () => ({ data: {}, error: null }));
+        const svc = withClient_ ? withClient(send) : new MailService();
+        let p: Promise<void>;
+        expect(() => { p = call(svc); }).not.toThrow();
+        await expect(p!).resolves.toBeUndefined();
+        expect(errSpy).toHaveBeenCalled();
+        const msg = errSpy.mock.calls.map((c) => c[0]).join('|');
+        expect(msg).toMatch(/to=\S+ subject=".+": /);
+        expect(msg).not.toContain('<html');
+      }
+    });
+
+    it('sendOrderPlaced: customer mail failure does not stop the admin mail, and vice versa', async () => {
+      process.env.ADMIN_NOTIFY_EMAIL = 'admin@x.com';
+      const send = jest.fn(async () => ({ data: {}, error: null }));
+      const svc = new MailService();
+      (svc as any).client = { emails: { send } };
+      (svc as any).admin = 'admin@x.com';
+      const o1: any = order();
+      Object.defineProperty(o1, 'shippingAddress', { get() { throw new Error('cust only'); } });
+      await svc.sendOrderPlaced(o1);
+      expect(send.mock.calls.map((c: any) => c[0].to)).toEqual(['admin@x.com']);
+
+      send.mockClear();
+      const o2: any = order();
+      let n = 0;
+      Object.defineProperty(o2, 'items', { get() { if (++n > 0 && n === 2) throw new Error('admin only'); return []; } });
+      await svc.sendOrderPlaced(o2);
+      expect(send.mock.calls.map((c: any) => c[0].to)).toEqual(['c@x.com']);
+    });
+  });
 });
