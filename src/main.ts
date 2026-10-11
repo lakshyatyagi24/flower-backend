@@ -3,6 +3,8 @@
 // init) pulled in .env, which is too late for the startup secret check below.
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
+import { ValidationPipe } from '@nestjs/common';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { json, urlencoded } from 'express';
 import { assertJwtSecret } from './auth/jwt.util';
@@ -12,11 +14,14 @@ async function bootstrap() {
   // missing/weak JWT secret and only erroring on the first token operation.
   assertJwtSecret();
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
-  // Configure body parser for larger payloads (10MB limit)
-  app.use(json({ limit: '10mb' }));
-  app.use(urlencoded({ limit: '10mb', extended: true }));
+  app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+  app.use(json({ limit: '2mb' }));
+  app.use(urlencoded({ limit: '2mb', extended: true }));
+  app.useGlobalPipes(
+    new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+  );
 
   const extraOrigins = (process.env.CORS_ORIGINS ?? process.env.CORS_ORIGIN ?? '')
     .split(',')
