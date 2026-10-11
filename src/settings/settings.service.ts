@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 const DEFAULTS: Record<string, string> = {
@@ -54,7 +54,17 @@ export class SettingsService {
   }
 
   async upsert(values: Record<string, string>): Promise<Record<string, string>> {
-    const updates = Object.entries(values).filter(([k]) => k && k.length < 128);
+    // Free-form key/value map: validate shape only (every key a short string,
+    // every value a string). A global DTO cannot express Record<string,string>.
+    if (!values || typeof values !== 'object' || Array.isArray(values)) {
+      throw new BadRequestException('Settings must be an object of string values');
+    }
+    for (const [k, v] of Object.entries(values)) {
+      if (!k || k.length > 128) throw new BadRequestException(`Invalid setting key "${k.slice(0, 40)}"`);
+      if (typeof v !== 'string') throw new BadRequestException(`Setting "${k}" must be a string`);
+      if (v.length > 20000) throw new BadRequestException(`Setting "${k}" is too long`);
+    }
+    const updates = Object.entries(values);
     await this.prisma.$transaction(
       updates.map(([key, value]) =>
         this.prisma.setting.upsert({

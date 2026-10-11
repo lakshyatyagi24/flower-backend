@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { normalizeIndianPhone } from '../common/validators';
 import { hashPassword, signJwt, verifyPassword } from './jwt.util';
 
 interface RegisterInput {
@@ -52,7 +53,7 @@ export class AuthService {
         email,
         password,
         name: input.name?.trim() || null,
-        phone: input.phone?.trim() || null,
+        phone: input.phone ? normalizeIndianPhone(input.phone) : null,
       },
     });
 

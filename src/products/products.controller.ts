@@ -12,23 +12,7 @@ import {
 } from '@nestjs/common';
 import { ProductsService } from './products.service';
 import { JwtAuthGuard, Roles } from '../auth/auth.guard';
-
-interface ProductBody {
-  name: string;
-  slug?: string;
-  description?: string;
-  price: number;
-  image?: string;
-  stock?: number;
-  featured?: boolean;
-  active?: boolean;
-  categoryId?: number | null;
-  productType?: 'CUT_FLOWER' | 'PLANT' | 'BOUQUET' | 'ARRANGEMENT' | 'HAMPER';
-  saleMode?: 'PURCHASE' | 'ENQUIRY';
-  gstRate?: number;
-  unit?: string;
-  minOrderQty?: number;
-}
+import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 
 @Controller('products')
 export class ProductsController {
@@ -101,14 +85,14 @@ export class ProductsController {
   @UseGuards(JwtAuthGuard)
   @Roles('ADMIN')
   @Post()
-  async create(@Body() body: ProductBody) {
+  async create(@Body() body: CreateProductDto) {
     return this.products.create(body);
   }
 
   @UseGuards(JwtAuthGuard)
   @Roles('ADMIN')
   @Put(':id')
-  async update(@Param('id') id: string, @Body() body: Partial<ProductBody>) {
+  async update(@Param('id') id: string, @Body() body: UpdateProductDto) {
     const numeric = parseInt(id, 10);
     if (isNaN(numeric)) throw new BadRequestException('Invalid product ID');
     return this.products.update(numeric, body);

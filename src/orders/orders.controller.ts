@@ -13,18 +13,9 @@ import {
 import { OrdersService } from './orders.service';
 import { CurrentUser, JwtAuthGuard, OptionalJwtAuthGuard, Roles } from '../auth/auth.guard';
 import { JwtPayload } from '../auth/jwt.util';
-
-interface CreateOrderBody {
-  items: { productId: number; quantity: number }[];
-  customerName: string;
-  customerEmail: string;
-  customerPhone?: string;
-  shippingAddress: string;
-  city?: string;
-  postalCode?: string;
-  notes?: string;
-  paymentMethod?: string;
-}
+import { CreateOrderDto } from './dto/create-order.dto';
+import { UpdateStatusDto } from './dto/update-status.dto';
+import { AdminUpdateOrderDto } from './dto/admin-update-order.dto';
 
 @Controller('orders')
 export class OrdersController {
@@ -33,7 +24,7 @@ export class OrdersController {
   // Anyone (logged in or guest) can place an order
   @UseGuards(OptionalJwtAuthGuard)
   @Post()
-  async create(@Body() body: CreateOrderBody, @Req() req: { user?: JwtPayload }) {
+  async create(@Body() body: CreateOrderDto, @Req() req: { user?: JwtPayload }) {
     return this.orders.create(req.user?.sub ?? null, body);
   }
 
@@ -96,7 +87,7 @@ export class OrdersController {
   @UseGuards(JwtAuthGuard)
   @Roles('ADMIN')
   @Put(':id/status')
-  async updateStatus(@Param('id') id: string, @Body() body: { status: string }) {
+  async updateStatus(@Param('id') id: string, @Body() body: UpdateStatusDto) {
     const numeric = parseInt(id, 10);
     if (isNaN(numeric)) throw new BadRequestException('Invalid order ID');
     return this.orders.updateStatus(numeric, body.status);
@@ -109,17 +100,7 @@ export class OrdersController {
   @Put(':id')
   async adminUpdate(
     @Param('id') id: string,
-    @Body()
-    body: {
-      status?: string;
-      trackingNumber?: string | null;
-      courierName?: string | null;
-      adminNotes?: string | null;
-      shippingAddress?: string | null;
-      city?: string | null;
-      postalCode?: string | null;
-      customerPhone?: string | null;
-    },
+    @Body() body: AdminUpdateOrderDto,
   ) {
     const numeric = parseInt(id, 10);
     if (isNaN(numeric)) throw new BadRequestException('Invalid order ID');

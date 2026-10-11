@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { normalizeIndianPhone } from '../common/validators';
 
 export type EnquiryStatusValue = 'NEW' | 'CONTACTED' | 'QUOTED' | 'CONVERTED' | 'CLOSED';
 const VALID_STATUSES: EnquiryStatusValue[] = ['NEW', 'CONTACTED', 'QUOTED', 'CONVERTED', 'CLOSED'];
@@ -26,8 +27,6 @@ interface ListParams {
   take?: number;
   skip?: number;
 }
-
-const PHONE_REGEX = /^[+\d][\d\s\-()]{6,18}$/;
 
 @Injectable()
 export class EnquiriesService {
@@ -59,14 +58,9 @@ export class EnquiriesService {
 
   async create(input: CreateEnquiryInput) {
     const name = input.customerName?.trim();
-    const phone = input.customerPhone?.trim();
     if (!name) throw new BadRequestException('Name is required');
-    if (!phone || !PHONE_REGEX.test(phone)) throw new BadRequestException('Valid phone number is required');
-
+    const phone = normalizeIndianPhone(input.customerPhone);
     const email = input.customerEmail?.trim().toLowerCase() || null;
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      throw new BadRequestException('Invalid email');
-    }
 
     let productName = input.productName?.trim() || null;
     if (input.productId) {

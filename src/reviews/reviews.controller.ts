@@ -13,12 +13,7 @@ import {
 import { ReviewsService } from './reviews.service';
 import { CurrentUser, JwtAuthGuard, Roles } from '../auth/auth.guard';
 import { JwtPayload } from '../auth/jwt.util';
-
-interface ReviewBody {
-  rating: number;
-  title?: string | null;
-  body: string;
-}
+import { UpsertReviewDto, UpdateReviewDto } from './dto/upsert-review.dto';
 
 function parseId(raw: string, label: string): number {
   const numeric = parseInt(raw, 10);
@@ -46,7 +41,7 @@ export class ReviewsController {
   @Post('products/:id/reviews')
   async upsertForProduct(
     @Param('id') id: string,
-    @Body() body: ReviewBody,
+    @Body() body: UpsertReviewDto,
     @CurrentUser() user: JwtPayload,
   ) {
     return this.reviews.upsertForProduct(parseId(id, 'product'), user.sub, body);
@@ -56,7 +51,7 @@ export class ReviewsController {
   @Patch('reviews/:id')
   async update(
     @Param('id') id: string,
-    @Body() body: Partial<ReviewBody>,
+    @Body() body: UpdateReviewDto,
     @CurrentUser() user: JwtPayload,
   ) {
     return this.reviews.update(parseId(id, 'review'), user.sub, user.role, body);

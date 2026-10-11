@@ -13,22 +13,8 @@ import {
 import { EnquiriesService } from './enquiries.service';
 import { JwtAuthGuard, OptionalJwtAuthGuard, Roles } from '../auth/auth.guard';
 import { JwtPayload } from '../auth/jwt.util';
-
-interface CreateEnquiryBody {
-  productId?: number | null;
-  productName?: string;
-  customerName: string;
-  customerEmail?: string;
-  customerPhone: string;
-  quantity?: number;
-  eventDate?: string;
-  occasion?: string;
-  budget?: number;
-  address?: string;
-  city?: string;
-  message?: string;
-  source?: string;
-}
+import { CreateEnquiryDto } from './dto/create-enquiry.dto';
+import { UpdateEnquiryStatusDto } from './dto/update-enquiry-status.dto';
 
 @Controller('enquiries')
 export class EnquiriesController {
@@ -37,7 +23,7 @@ export class EnquiriesController {
   // Anyone (logged in or guest) can submit an enquiry
   @UseGuards(OptionalJwtAuthGuard)
   @Post()
-  async create(@Body() body: CreateEnquiryBody, @Req() req: { user?: JwtPayload }) {
+  async create(@Body() body: CreateEnquiryDto, @Req() req: { user?: JwtPayload }) {
     return this.enquiries.create({ ...body, userId: req.user?.sub ?? null });
   }
 
@@ -75,13 +61,9 @@ export class EnquiriesController {
   @UseGuards(JwtAuthGuard)
   @Roles('ADMIN')
   @Put(':id/status')
-  async updateStatus(
-    @Param('id') id: string,
-    @Body() body: { status: string; adminNotes?: string },
-  ) {
+  async updateStatus(@Param('id') id: string, @Body() body: UpdateEnquiryStatusDto) {
     const numeric = parseInt(id, 10);
     if (isNaN(numeric)) throw new BadRequestException('Invalid enquiry ID');
-    if (!body?.status) throw new BadRequestException('Status is required');
-    return this.enquiries.updateStatus(numeric, body.status, body.adminNotes);
+    return this.enquiries.updateStatus(numeric, body.status, body.adminNotes ?? undefined);
   }
 }

@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { normalizeIndianPhone } from '../common/validators';
 
 interface OrderItemInput {
   productId: number;
@@ -15,10 +16,10 @@ interface CreateOrderInput {
   items: OrderItemInput[];
   customerName: string;
   customerEmail: string;
-  customerPhone?: string;
+  customerPhone: string;
   shippingAddress: string;
-  city?: string;
-  postalCode?: string;
+  city: string;
+  postalCode: string;
   notes?: string;
   paymentMethod?: string;
 }
@@ -72,12 +73,9 @@ export class OrdersService {
   }
 
   async create(userId: number | null, input: CreateOrderInput) {
-    if (!Array.isArray(input.items) || input.items.length === 0) {
-      throw new BadRequestException('Order must have at least one item');
-    }
-    if (!input.customerName?.trim()) throw new BadRequestException('Customer name is required');
-    if (!input.customerEmail?.trim()) throw new BadRequestException('Customer email is required');
-    if (!input.shippingAddress?.trim()) throw new BadRequestException('Shipping address is required');
+    // DTO covers shape; these catch whitespace-only values it cannot.
+    if (!input.customerName.trim()) throw new BadRequestException('Customer name is required');
+    if (!input.shippingAddress.trim()) throw new BadRequestException('Shipping address is required');
 
     const productIds = input.items.map((i) => i.productId);
     type ProductRow = {
@@ -174,7 +172,7 @@ export class OrdersService {
           paymentMethod: input.paymentMethod || 'COD',
           customerName: input.customerName.trim(),
           customerEmail,
-          customerPhone: input.customerPhone?.trim() || null,
+          customerPhone: normalizeIndianPhone(input.customerPhone ?? ''),
           shippingAddress: input.shippingAddress.trim(),
           city: input.city?.trim() || null,
           postalCode: input.postalCode?.trim() || null,
