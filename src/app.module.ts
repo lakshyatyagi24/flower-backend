@@ -13,6 +13,7 @@ import { EnquiriesModule } from './enquiries/enquiries.module';
 import { MailModule } from './mail/mail.module';
 import { HealthController } from './health/health.controller';
 import { UploadsModule } from './uploads/uploads.module';
+import { NewsletterModule } from './newsletter/newsletter.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { UploadsModule } from './uploads/uploads.module';
     ReviewsModule,
     EnquiriesModule,
     UploadsModule,
+    NewsletterModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

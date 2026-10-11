@@ -232,3 +232,10 @@ model PasswordResetToken {
 
   @@index([userId])
 }
+
+model Subscriber {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  source    String   @default("footer")
+  createdAt DateTime @default(now())
+}
