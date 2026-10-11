@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizeIndianPhone } from '../common/validators';
+import { MailService } from '../mail/mail.service';
 
 interface OrderItemInput {
   productId: number;
@@ -40,7 +41,10 @@ const STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
 
 @Injectable()
 export class OrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mail: MailService,
+  ) {}
 
   private include = {
     items: {
@@ -144,7 +148,7 @@ export class OrdersService {
       if (account?.email) customerEmail = account.email.trim().toLowerCase();
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const created = await this.prisma.$transaction(async (tx) => {
       // Atomically claim stock BEFORE creating the order. updateMany with a
       // `stock >= qty` guard serializes concurrent buyers — if another order
       // took the last units between our snapshot and now, count is 0 and we
@@ -184,6 +188,9 @@ export class OrdersService {
 
       return order;
     });
+    // Fire-and-forget: mail must never fail or slow the request.
+    void this.mail.sendOrderPlaced(created).catch(() => undefined);
+    return created;
   }
 
   async listMine(userId: number) {
@@ -258,7 +265,7 @@ export class OrdersService {
     if (from === to) return this.getOne(id);
     this.assertTransition(from, to);
 
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       if (to === 'CANCELLED') {
         // Restore reserved stock exactly once on cancellation.
         const items = await tx.orderItem.findMany({
@@ -280,6 +287,8 @@ export class OrdersService {
         include: this.include,
       });
     });
+    if (to === 'SHIPPED') void this.mail.sendOrderShipped(updated).catch(() => undefined);
+    return updated;
   }
 
   /**
@@ -326,7 +335,7 @@ export class OrdersService {
     if (patch.postalCode !== undefined) data.postalCode = patch.postalCode || null;
     if (patch.customerPhone !== undefined) data.customerPhone = patch.customerPhone || null;
 
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       if (restockOnCancel) {
         const items = await tx.orderItem.findMany({
           where: { orderId: id },
@@ -347,6 +356,9 @@ export class OrdersService {
         include: this.include,
       });
     });
+    // data.status is only set when the status actually changed.
+    if (data.status === 'SHIPPED') void this.mail.sendOrderShipped(updated).catch(() => undefined);
+    return updated;
   }
 
   async stats() {

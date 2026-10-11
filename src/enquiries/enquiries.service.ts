@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizeIndianPhone } from '../common/validators';
+import { MailService } from '../mail/mail.service';
 
 export type EnquiryStatusValue = 'NEW' | 'CONTACTED' | 'QUOTED' | 'CONVERTED' | 'CLOSED';
 const VALID_STATUSES: EnquiryStatusValue[] = ['NEW', 'CONTACTED', 'QUOTED', 'CONVERTED', 'CLOSED'];
@@ -30,7 +31,10 @@ interface ListParams {
 
 @Injectable()
 export class EnquiriesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mail: MailService,
+  ) {}
 
   private select = {
     id: true,
@@ -76,7 +80,7 @@ export class EnquiriesService {
       eventDate = parsed;
     }
 
-    return this.prisma.enquiry.create({
+    const enquiry = await this.prisma.enquiry.create({
       data: {
         userId: input.userId ?? null,
         productId: input.productId ?? null,
@@ -95,6 +99,9 @@ export class EnquiriesService {
       },
       select: this.select,
     });
+    // Fire-and-forget: mail must never fail or slow the request.
+    void this.mail.sendEnquiryReceived(enquiry).catch(() => undefined);
+    return enquiry;
   }
 
   async list(params: ListParams) {
