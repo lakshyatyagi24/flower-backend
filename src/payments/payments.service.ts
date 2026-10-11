@@ -11,6 +11,15 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { RAZORPAY_CLIENT, RazorpayClient } from './razorpay.client';
 
+/** Env value, trimmed; whitespace-only counts as unset. */
+const envTrim = (name: string): string => (process.env[name] ?? '').trim();
+
+interface WebhookPayment {
+  id?: unknown;
+  order_id?: unknown;
+  amount?: unknown;
+}
+
 export type MarkPaidResult = 'PAID' | 'ALREADY_PAID' | 'PAID_AFTER_CANCEL';
 
 @Injectable()
@@ -84,7 +93,7 @@ export class PaymentsService {
     };
   }
 
-  private signatureOk(payload: string, signature: string, secret: string): boolean {
+  private signatureOk(payload: string | Buffer, signature: string, secret: string): boolean {
     const expected = Buffer.from(createHmac('sha256', secret).update(payload).digest('hex'));
     const given = Buffer.from(signature);
     return expected.length === given.length && timingSafeEqual(expected, given);
@@ -118,6 +127,70 @@ export class PaymentsService {
     }
     void this.mail.sendOrderPaid(fresh).catch(() => undefined);
     return 'PAID';
+  }
+
+  /**
+   * Razorpay webhook. Signature is checked over the RAW body bytes before anything is parsed.
+   * Any validly signed delivery gets a 2xx (so Razorpay does not retry forever); only a bad
+   * signature or missing config is a 400. Never log the body, signature or secrets.
+   */
+  async handleWebhook(rawBody: Buffer | undefined, signature: string | undefined): Promise<{ ok: true }> {
+    // Never HMAC with an empty secret: anyone could forge that signature.
+    const secret = envTrim('RAZORPAY_WEBHOOK_SECRET');
+    if (!secret || !signature || !rawBody || !this.signatureOk(rawBody, signature, secret)) {
+      throw new BadRequestException('Invalid webhook signature');
+    }
+
+    let evt: any;
+    try {
+      evt = JSON.parse(rawBody.toString('utf8'));
+    } catch {
+      this.log.warn('webhook ignored: signed body is not valid JSON');
+      return { ok: true };
+    }
+    const event = typeof evt?.event === 'string' ? evt.event : '';
+    if (event !== 'payment.captured' && event !== 'order.paid' && event !== 'payment.failed') {
+      this.log.log(`webhook ignored: unhandled event type ${event.slice(0, 64) || '(none)'}`);
+      return { ok: true };
+    }
+    const payment: WebhookPayment | undefined = evt?.payload?.payment?.entity;
+    const rzpOrderId = payment?.order_id;
+    if (!payment || typeof rzpOrderId !== 'string' || !rzpOrderId) {
+      this.log.warn(`webhook ${event} ignored: no payment/order reference in payload`);
+      return { ok: true };
+    }
+
+    const order = await this.prisma.order.findUnique({ where: { razorpayOrderId: rzpOrderId } });
+    if (!order) {
+      this.log.warn(`webhook ${event} for unknown razorpay order ${rzpOrderId.slice(0, 64)}`);
+      return { ok: true };
+    }
+
+    if (event === 'payment.failed') {
+      // Guarded: a failed attempt must never downgrade an already-paid order.
+      await this.prisma.order.updateMany({
+        where: { id: order.id, paymentStatus: 'UNPAID' },
+        data: { paymentStatus: 'FAILED' },
+      });
+      return { ok: true };
+    }
+
+    // payment.captured / order.paid
+    const paymentId = payment.id;
+    if (typeof paymentId !== 'string' || !paymentId) {
+      this.log.warn(`webhook ${event} for order ${order.id} has no payment id; not marking paid`);
+      return { ok: true };
+    }
+    const expectedPaise = Math.round(order.total * 100);
+    if (payment.amount !== expectedPaise) {
+      this.log.warn(
+        `webhook ${event} amount mismatch for order ${order.id}: got ${String(payment.amount)} paise, expected ${expectedPaise}; NOT marked paid, review manually`,
+      );
+      return { ok: true };
+    }
+    const result = await this.markPaid(order.id, paymentId);
+    this.log.log(`webhook ${event} order=${order.id} result=${result}`);
+    return { ok: true };
   }
 
   async verify(input: { orderId: number; razorpayOrderId: string; razorpayPaymentId: string; signature: string }) {

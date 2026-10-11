@@ -1,5 +1,6 @@
-import { Body, Controller, HttpCode, Post, Req, UseGuards } from '@nestjs/common';
-import { Throttle } from '@nestjs/throttler';
+import { Body, Controller, Headers, HttpCode, Post, RawBodyRequest, Req, UseGuards } from '@nestjs/common';
+import { SkipThrottle, Throttle } from '@nestjs/throttler';
+import type { Request } from 'express';
 import { OptionalJwtAuthGuard } from '../auth/auth.guard';
 import { JwtPayload } from '../auth/jwt.util';
 import { PaymentsService } from './payments.service';
@@ -23,5 +24,13 @@ export class PaymentsController {
   @Post('verify')
   verify(@Body() body: VerifyDto) {
     return this.payments.verify(body);
+  }
+
+  /** Called by Razorpay, not browsers: no auth, signature-checked over the raw body. */
+  @SkipThrottle()
+  @HttpCode(200)
+  @Post('webhook')
+  webhook(@Req() req: RawBodyRequest<Request>, @Headers('x-razorpay-signature') signature?: string) {
+    return this.payments.handleWebhook(req.rawBody, signature);
   }
 }

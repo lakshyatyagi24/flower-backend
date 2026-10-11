@@ -14,7 +14,10 @@ function fakePrisma(order: any) {
     );
   return {
     order: {
-      findUnique: jest.fn(async ({ where }: any) => (order && order.id === where.id ? { ...order } : null)),
+      findUnique: jest.fn(async ({ where }: any) => {
+        const hit = where.razorpayOrderId !== undefined ? order?.razorpayOrderId === where.razorpayOrderId : order?.id === where.id;
+        return hit ? { ...order } : null;
+      }),
       update: jest.fn(async ({ data }: any) => Object.assign(order, data)),
       updateMany: jest.fn(async ({ where, data }: any) => {
         const ok = order.id === where.id && matches(where);
@@ -218,6 +221,143 @@ describe('PaymentsService', () => {
       await expect(make(rzpOrder({ razorpayOrderId: null })).verify(body())).rejects.toBeInstanceOf(BadRequestException);
       await expect(make(rzpOrder()).verify(body({ orderId: 999 }))).rejects.toBeInstanceOf(BadRequestException);
       expect(order.paymentStatus).toBe('UNPAID');
+    });
+  });
+
+  describe('handleWebhook', () => {
+    const WH = 'whsec_unit';
+    const raw = (o: unknown) => Buffer.from(typeof o === 'string' ? o : JSON.stringify(o), 'utf8');
+    const sigOf = (b: Buffer, secret = WH) => createHmac('sha256', secret).update(b).digest('hex');
+    const evt = (event: string, over: any = {}) => ({
+      event,
+      payload: { payment: { entity: { id: 'pay_w', order_id: 'order_w', amount: 124950, ...over } } },
+    });
+    const wOrder = (over: any = {}) => baseOrder({ razorpayOrderId: 'order_w', paymentMethod: 'RAZORPAY', ...over });
+    const savedWh = process.env.RAZORPAY_WEBHOOK_SECRET;
+    beforeEach(() => { process.env.RAZORPAY_WEBHOOK_SECRET = WH; });
+    afterEach(() => {
+      if (savedWh === undefined) delete process.env.RAZORPAY_WEBHOOK_SECRET; else process.env.RAZORPAY_WEBHOOK_SECRET = savedWh;
+    });
+    const call = (order: any, body: Buffer | undefined, sig: string | undefined) => make(order).handleWebhook(body, sig);
+
+    it('rejects a bad signature, a wrong-length one, a missing header and a missing raw body with 400', async () => {
+      const b = raw(evt('payment.captured'));
+      const order = wOrder();
+      for (const sig of ['bad', 'a'.repeat(64), sigOf(b, 'other'), undefined, '']) {
+        await expect(call(order, b, sig)).rejects.toBeInstanceOf(BadRequestException);
+      }
+      await expect(call(order, undefined, sigOf(b))).rejects.toBeInstanceOf(BadRequestException);
+      expect(order.paymentStatus).toBe('UNPAID');
+    });
+
+    it('never verifies with an empty or whitespace secret (forged signature is rejected)', async () => {
+      const b = raw(evt('payment.captured'));
+      for (const v of [undefined, '', '   ']) {
+        if (v === undefined) delete process.env.RAZORPAY_WEBHOOK_SECRET; else process.env.RAZORPAY_WEBHOOK_SECRET = v;
+        const order = wOrder();
+        await expect(call(order, b, sigOf(b, ''))).rejects.toBeInstanceOf(BadRequestException);
+        expect(order.paymentStatus).toBe('UNPAID');
+      }
+    });
+
+    it('trims the configured secret', async () => {
+      process.env.RAZORPAY_WEBHOOK_SECRET = `  ${WH}\n`;
+      const b = raw(evt('payment.captured'));
+      await expect(call(wOrder(), b, sigOf(b))).resolves.toEqual({ ok: true });
+    });
+
+    it('signature covers the raw bytes, not re-serialised JSON', async () => {
+      const b = raw('{ "event" : "payment.captured",  "payload":{"payment":{"entity":{"id":"pay_w","order_id":"order_w","amount":124950}}} }');
+      const order = wOrder();
+      await expect(call(order, b, sigOf(raw(JSON.stringify(JSON.parse(b.toString())))))).rejects.toBeInstanceOf(BadRequestException);
+      await expect(call(order, b, sigOf(b))).resolves.toEqual({ ok: true });
+      expect(order.paymentStatus).toBe('PAID');
+    });
+
+    it('payment.captured marks the order paid once across duplicate deliveries', async () => {
+      const b = raw(evt('payment.captured'));
+      const order = wOrder();
+      const svc = make(order);
+      await expect(svc.handleWebhook(b, sigOf(b))).resolves.toEqual({ ok: true });
+      await expect(svc.handleWebhook(b, sigOf(b))).resolves.toEqual({ ok: true });
+      expect(order).toMatchObject({ paymentStatus: 'PAID', status: 'PAID', razorpayPaymentId: 'pay_w' });
+      expect(mail.sendOrderPaid).toHaveBeenCalledTimes(1);
+    });
+
+    it('order.paid with payment info is handled like a capture', async () => {
+      const b = raw({ event: 'order.paid', payload: { ...evt('x').payload, order: { entity: { id: 'order_w', amount_paid: 124950 } } } });
+      const order = wOrder();
+      await call(order, b, sigOf(b));
+      expect(order.paymentStatus).toBe('PAID');
+    });
+
+    it('amount mismatch (or missing/non-numeric amount): not marked paid, warns with ids and amounts, still ok', async () => {
+      for (const over of [{ amount: 100 }, { amount: undefined }, { amount: '124950' }]) {
+        warnSpy.mockClear();
+        const b = raw(evt('payment.captured', over));
+        const order = wOrder();
+        await expect(call(order, b, sigOf(b))).resolves.toEqual({ ok: true });
+        expect(order.paymentStatus).toBe('UNPAID');
+        expect(mail.sendOrderPaid).not.toHaveBeenCalled();
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const msg = String(warnSpy.mock.calls[0][0]);
+        expect(msg).toContain('7');
+        expect(msg).toContain('124950');
+      }
+    });
+
+    it('payment.failed sets FAILED only while UNPAID; never downgrades PAID/REFUNDED', async () => {
+      const b = raw(evt('payment.failed'));
+      const o1 = wOrder();
+      await call(o1, b, sigOf(b));
+      expect(o1.paymentStatus).toBe('FAILED');
+      for (const ps of ['PAID', 'REFUNDED']) {
+        const o2 = wOrder({ paymentStatus: ps });
+        await call(o2, b, sigOf(b));
+        expect(o2.paymentStatus).toBe(ps);
+      }
+    });
+
+    it('a late payment.failed after capture does not undo PAID', async () => {
+      const order = wOrder();
+      const svc = make(order);
+      const cap = raw(evt('payment.captured'));
+      const fail = raw(evt('payment.failed'));
+      await svc.handleWebhook(cap, sigOf(cap));
+      await svc.handleWebhook(fail, sigOf(fail));
+      expect(order.paymentStatus).toBe('PAID');
+    });
+
+    it('unknown order, unknown event and payload without payment are 200 no-ops; logs razorpay order id only', async () => {
+      const order = wOrder();
+      const unknown = raw(evt('payment.captured', { order_id: 'order_nope' }));
+      await expect(call(order, unknown, sigOf(unknown))).resolves.toEqual({ ok: true });
+      const msg = String(warnSpy.mock.calls[0][0]);
+      expect(msg).toContain('order_nope');
+      expect(msg).not.toContain('124950');
+      for (const body of [evt('refund.created'), { event: 'payment.captured' }, { event: 'payment.captured', payload: {} }]) {
+        const b = raw(body);
+        await expect(call(order, b, sigOf(b))).resolves.toEqual({ ok: true });
+      }
+      expect(order.paymentStatus).toBe('UNPAID');
+    });
+
+    it('malformed JSON with a valid signature is a 200 no-op', async () => {
+      for (const text of ['not json', '', 'null', '[]', '"x"']) {
+        const b = raw(text);
+        await expect(call(wOrder(), b, sigOf(b))).resolves.toEqual({ ok: true });
+      }
+    });
+
+    it('never logs the body, signature or secret', async () => {
+      const logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+      const b = raw(evt('payment.captured', { email: 'leak@x.com', contact: '+910000000000' }));
+      const sig = sigOf(b);
+      await call(wOrder(), b, sig);
+      const all = [...warnSpy.mock.calls, ...logSpy.mock.calls].map((c) => String(c[0])).join('\n');
+      expect(all).not.toContain(sig);
+      expect(all).not.toContain(WH);
+      expect(all).not.toContain('leak@x.com');
     });
   });
 });

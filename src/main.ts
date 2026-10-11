@@ -6,7 +6,8 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
-import { json, urlencoded } from 'express';
+import type { NestExpressApplication } from '@nestjs/platform-express';
+import { applyBodyParsers } from './common/body-parsers';
 import { assertJwtSecret } from './auth/jwt.util';
 import { parseTrustProxy } from './common/trust-proxy';
 
@@ -15,7 +16,7 @@ async function bootstrap() {
   // missing/weak JWT secret and only erroring on the first token operation.
   assertJwtSecret();
 
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
 
   // Behind Caddy + nginx the socket peer is always local; trust N proxy hops so
   // req.ip (the throttler key) is the real client IP. Unset = no trust.
@@ -23,8 +24,7 @@ async function bootstrap() {
   if (trustProxy) app.getHttpAdapter().getInstance().set('trust proxy', trustProxy);
 
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
-  app.use(json({ limit: '2mb' }));
-  app.use(urlencoded({ limit: '2mb', extended: true }));
+  applyBodyParsers(app);
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
   );
