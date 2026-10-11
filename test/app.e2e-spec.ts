@@ -29,4 +29,27 @@ describe('App (e2e)', () => {
       .send({ email: 'a@b.com', password: 'x', evil: true })
       .expect(400);
   });
+
+  it('POST /auth/forgot-password for unknown email returns 200 {ok:true}', () => {
+    return request(app.getHttpServer())
+      .post('/auth/forgot-password')
+      .send({ email: 'nobody-here@example.com' })
+      .expect(200)
+      .expect({ ok: true });
+  });
+
+  it('POST /auth/reset-password with bogus 64-char token returns 400', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .send({ token: 'a'.repeat(64), password: 'newpassword123' })
+      .expect(400);
+    expect(res.body.message).toBe('Invalid or expired reset link');
+  });
+
+  it('POST /auth/reset-password with wrong-length token returns 400', () => {
+    return request(app.getHttpServer())
+      .post('/auth/reset-password')
+      .send({ token: 'short', password: 'newpassword123' })
+      .expect(400);
+  });
 });

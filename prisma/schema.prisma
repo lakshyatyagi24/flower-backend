@@ -74,6 +74,7 @@ model User {
   bookings  Booking[]
   enquiries Enquiry[]
   reviews   Review[]
+  passwordResetTokens PasswordResetToken[]
   createdAt DateTime  @default(now())
 }
 
@@ -218,4 +219,16 @@ enum EnquiryStatus {
   QUOTED
   CONVERTED
   CLOSED
+}
+
+model PasswordResetToken {
+  id        Int      @id @default(autoincrement())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    Int
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }

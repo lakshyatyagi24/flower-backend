@@ -10,12 +10,14 @@ import { SettingsModule } from './settings/settings.module';
 import { UsersModule } from './users/users.module';
 import { ReviewsModule } from './reviews/reviews.module';
 import { EnquiriesModule } from './enquiries/enquiries.module';
+import { MailModule } from './mail/mail.module';
 import { HealthController } from './health/health.controller';
 
 @Module({
   imports: [
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 100 }]),
     ScheduleModule.forRoot(),
+    MailModule,
     EcommerceModule,
     AuthModule,
     ProductsModule,
