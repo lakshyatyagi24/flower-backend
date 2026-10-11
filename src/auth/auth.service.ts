@@ -94,9 +94,11 @@ export class AuthService {
     await this.prisma.passwordResetToken.create({
       data: { userId: user.id, tokenHash: this.hashToken(raw), expiresAt: new Date(Date.now() + AuthService.RESET_TTL_MS) },
     });
-    const base = user.role === 'ADMIN'
-      ? (process.env.ADMIN_SITE_URL ?? 'http://localhost:3002')
-      : (process.env.PUBLIC_SITE_URL ?? 'http://localhost:3000');
+    const base = (
+      user.role === 'ADMIN'
+        ? (process.env.ADMIN_SITE_URL || 'http://localhost:3002')
+        : (process.env.PUBLIC_SITE_URL || 'http://localhost:3000')
+    ).replace(/\/+$/, '');
     const path = user.role === 'ADMIN' ? '/reset-password' : '/account/reset-password';
     const url = `${base}${path}?token=${raw}`;
     // fire-and-forget so response time does not reveal whether the email exists
@@ -104,12 +106,14 @@ export class AuthService {
   }
 
   async resetPassword(raw: string, password: string): Promise<void> {
-    const row = await this.prisma.passwordResetToken.findUnique({ where: { tokenHash: this.hashToken(raw) } });
-    if (!row || row.usedAt || row.expiresAt.getTime() < Date.now()) {
-      throw new BadRequestException('Invalid or expired reset link');
-    }
     const hashed = await hashPassword(password);
+    const invalid = () => new BadRequestException('Invalid or expired reset link');
     await this.prisma.$transaction(async (tx) => {
+      const row = await tx.passwordResetToken.findUnique({ where: { tokenHash: this.hashToken(raw) } });
+      if (!row || row.usedAt || row.expiresAt.getTime() <= Date.now()) throw invalid();
+      // Atomic consume: only one concurrent request can delete this row.
+      const consumed = await tx.passwordResetToken.deleteMany({ where: { id: row.id } });
+      if (consumed.count !== 1) throw invalid();
       await tx.user.update({ where: { id: row.userId }, data: { password: hashed } });
       await tx.passwordResetToken.deleteMany({ where: { userId: row.userId } });
     });

@@ -8,6 +8,7 @@ import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { json, urlencoded } from 'express';
 import { assertJwtSecret } from './auth/jwt.util';
+import { parseTrustProxy } from './common/trust-proxy';
 
 async function bootstrap() {
   // Fail fast at startup if auth is misconfigured, rather than booting with a
@@ -15,6 +16,11 @@ async function bootstrap() {
   assertJwtSecret();
 
   const app = await NestFactory.create(AppModule, { rawBody: true });
+
+  // Behind Caddy + nginx the socket peer is always local; trust N proxy hops so
+  // req.ip (the throttler key) is the real client IP. Unset = no trust.
+  const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
+  if (trustProxy) app.getHttpAdapter().getInstance().set('trust proxy', trustProxy);
 
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(json({ limit: '2mb' }));
