@@ -210,7 +210,7 @@ export class OrdersService {
       include: this.include,
       orderBy: { createdAt: 'desc' },
     });
-    return rows.map((r: { refundNote?: unknown }) => this.forCustomer(r));
+    return rows.map((r) => this.forCustomer(r));
   }
 
   async getMine(userId: number, id: number) {

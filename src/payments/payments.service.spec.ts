@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, ForbiddenException, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { createHmac } from 'crypto';
 import { PaymentsService } from './payments.service';
 
@@ -12,24 +12,26 @@ function fakePrisma(order: any) {
     Object.entries(where).every(([k, v]: [string, any]) =>
       v && typeof v === 'object' && 'in' in v ? v.in.includes(order[k]) : (order[k] ?? null) === v,
     );
-  return {
-    order: {
-      findUnique: jest.fn(async ({ where }: any) => {
-        const hit = where.razorpayOrderId !== undefined ? order?.razorpayOrderId === where.razorpayOrderId : order?.id === where.id;
-        return hit ? { ...order } : null;
-      }),
-      update: jest.fn(async ({ data }: any) => Object.assign(order, data)),
-      updateMany: jest.fn(async ({ where, data }: any) => {
-        const ok = order.id === where.id && matches(where);
-        if (ok) Object.assign(order, data);
-        return { count: ok ? 1 : 0 };
-      }),
-    },
-  } as any;
+  const orderApi = () => ({
+    findUnique: jest.fn(async ({ where }: any) => {
+      const hit = where.razorpayOrderId !== undefined ? order?.razorpayOrderId === where.razorpayOrderId : order?.id === where.id;
+      return hit ? { ...order } : null;
+    }),
+    update: jest.fn(async ({ data }: any) => Object.assign(order, data)),
+    updateMany: jest.fn(async ({ where, data }: any) => {
+      const ok = order.id === where.id && matches(where);
+      if (ok) Object.assign(order, data);
+      return { count: ok ? 1 : 0 };
+    }),
+  });
+  const prisma: any = { order: orderApi(), txOrder: orderApi() };
+  // $transaction hands the callback a tx client with its own (separately observable) order API.
+  prisma.$transaction = jest.fn(async (fn: any) => fn({ order: prisma.txOrder }));
+  return prisma;
 }
 
 const baseOrder = (over: any = {}) => ({
-  id: 7, userId: null, total: 1249.5, status: 'PENDING', paymentStatus: 'UNPAID', paymentMethod: 'COD',
+  id: 7, userId: null, total: 1249.5, status: 'PENDING', paymentStatus: 'UNPAID', paymentMethod: 'RAZORPAY',
   razorpayOrderId: null, razorpayPaymentId: null, customerName: 'A', customerEmail: 'a@b.com',
   customerPhone: '9354016059', items: [], ...over,
 });
@@ -39,7 +41,8 @@ describe('PaymentsService', () => {
   let mail: { sendOrderPaid: jest.Mock };
   let warnSpy: jest.SpyInstance;
   const saved = { id: process.env.RAZORPAY_KEY_ID, secret: process.env.RAZORPAY_KEY_SECRET };
-  const make = (order: any) => new PaymentsService(fakePrisma(order), rzp as any, mail as any);
+  const makeWith = (prisma: any) => new PaymentsService(prisma, rzp as any, mail as any);
+  const make = (order: any) => makeWith(fakePrisma(order));
 
   beforeEach(() => {
     process.env.RAZORPAY_KEY_SECRET = SECRET;
@@ -55,7 +58,7 @@ describe('PaymentsService', () => {
   });
 
   describe('createRazorpayOrder', () => {
-    it('creates a razorpay order in integer paise, stores the id and sets paymentMethod', async () => {
+    it('creates a razorpay order in integer paise and stores the id', async () => {
       const order = baseOrder();
       const res = await make(order).createRazorpayOrder(7, null, 'A@B.com');
       expect(rzp.createOrder).toHaveBeenCalledWith(124950, 'order_7');
@@ -109,12 +112,62 @@ describe('PaymentsService', () => {
       await expect(make(baseOrder({ paymentStatus: 'FAILED' })).createRazorpayOrder(7, null, 'a@b.com')).resolves.toBeDefined();
     });
 
-    it('throws a clear error when RAZORPAY_KEY_ID is not configured', async () => {
-      for (const v of [undefined, '']) {
-        if (v === undefined) delete process.env.RAZORPAY_KEY_ID; else process.env.RAZORPAY_KEY_ID = v;
-        await expect(make(baseOrder()).createRazorpayOrder(7, null, 'a@b.com')).rejects.toThrow('Online payments are not configured');
+    it('503 when EITHER the key id or the key secret is missing/blank (whitespace counts as unset)', async () => {
+      for (const name of ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET']) {
+        const prev = process.env[name];
+        for (const v of [undefined, '', '   ']) {
+          if (v === undefined) delete process.env[name]; else process.env[name] = v;
+          await expect(make(baseOrder()).createRazorpayOrder(7, null, 'a@b.com')).rejects.toBeInstanceOf(ServiceUnavailableException);
+          await expect(make(baseOrder()).createRazorpayOrder(7, null, 'a@b.com')).rejects.toThrow('Online payments are not configured');
+        }
+        process.env[name] = prev;
       }
       expect(rzp.createOrder).not.toHaveBeenCalled();
+    });
+
+    it('returns the trimmed key id', async () => {
+      process.env.RAZORPAY_KEY_ID = '  rzp_test_x \n';
+      await expect(make(baseOrder()).createRazorpayOrder(7, null, 'a@b.com')).resolves.toMatchObject({ keyId: 'rzp_test_x' });
+    });
+
+    it('a provider failure becomes 502 "Payment provider unavailable", logging only err.message and the order id', async () => {
+      const errSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      const err: any = new Error('upstream timeout');
+      err.response = { secret: 'TOP-SECRET-BODY' };
+      rzp.createOrder.mockRejectedValue(err);
+      const order = baseOrder();
+      const p = make(order).createRazorpayOrder(7, null, 'a@b.com');
+      await expect(p).rejects.toBeInstanceOf(BadGatewayException);
+      await expect(p).rejects.toThrow('Payment provider unavailable, please retry');
+      expect(order.razorpayOrderId).toBeNull();
+      const logged = errSpy.mock.calls.map((c) => c.map(String).join(' ')).join('\n');
+      expect(logged).toContain('7');
+      expect(logged).toContain('upstream timeout');
+      expect(logged).not.toContain('TOP-SECRET-BODY');
+    });
+
+    it('rejects a COD order with 400 and never converts it to Razorpay', async () => {
+      const order = baseOrder({ paymentMethod: 'COD' });
+      const p = make(order).createRazorpayOrder(7, null, 'a@b.com');
+      await expect(p).rejects.toBeInstanceOf(BadRequestException);
+      await expect(p).rejects.toThrow('This order is cash on delivery');
+      expect(rzp.createOrder).not.toHaveBeenCalled();
+      expect(order.paymentMethod).toBe('COD');
+      expect(order.razorpayOrderId).toBeNull();
+    });
+
+    it('losing a concurrent race: uses the stored winner id and creates no second order', async () => {
+      const order = baseOrder();
+      const prisma = fakePrisma(order);
+      // Another request stores its id between our read and our guarded write.
+      prisma.order.updateMany.mockImplementationOnce(async () => {
+        order.razorpayOrderId = 'order_winner';
+        return { count: 0 };
+      });
+      const res = await makeWith(prisma).createRazorpayOrder(7, null, 'a@b.com');
+      expect(res.razorpayOrderId).toBe('order_winner');
+      expect(order.razorpayOrderId).toBe('order_winner');
+      expect(rzp.createOrder).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -170,6 +223,33 @@ describe('PaymentsService', () => {
       expect(mail.sendOrderPaid).not.toHaveBeenCalled();
     });
 
+    it('runs both guarded writes inside ONE transaction and mails only after it commits', async () => {
+      const order = baseOrder();
+      const prisma = fakePrisma(order);
+      const svc = makeWith(prisma);
+      let committed = false;
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const r = await fn({ order: prisma.txOrder });
+        committed = true;
+        return r;
+      });
+      mail.sendOrderPaid.mockImplementation(async () => { expect(committed).toBe(true); });
+      await expect(svc.markPaid(7, 'pay_tx')).resolves.toBe('PAID');
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.txOrder.updateMany).toHaveBeenCalledTimes(2);
+      expect(prisma.order.updateMany).not.toHaveBeenCalled();
+      expect(mail.sendOrderPaid).toHaveBeenCalledTimes(1);
+    });
+
+    it('a failure of the second write propagates (transaction rolls back) and nothing is mailed', async () => {
+      const order = baseOrder();
+      const prisma = fakePrisma(order);
+      const real = prisma.txOrder.updateMany.getMockImplementation()!;
+      prisma.txOrder.updateMany.mockImplementationOnce(real).mockImplementationOnce(async () => { throw new Error('db down'); });
+      await expect(makeWith(prisma).markPaid(7, 'pay_x')).rejects.toThrow('db down');
+      expect(mail.sendOrderPaid).not.toHaveBeenCalled();
+    });
+
     it('a mail failure does not fail markPaid', async () => {
       mail.sendOrderPaid.mockRejectedValue(new Error('boom'));
       await expect(make(baseOrder()).markPaid(7, 'pay_6')).resolves.toBe('PAID');
@@ -189,6 +269,24 @@ describe('PaymentsService', () => {
       expect(order).toMatchObject({ status: 'PAID', paymentStatus: 'PAID' });
       await expect(svc.verify(body())).resolves.toEqual({ ok: true, status: 'PAID' });
       expect(mail.sendOrderPaid).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns status CANCELLED when the payment landed on an already-cancelled order (refund will follow)', async () => {
+      const order = rzpOrder({ status: 'CANCELLED' });
+      await expect(make(order).verify(body())).resolves.toEqual({ ok: true, status: 'CANCELLED' });
+      expect(order).toMatchObject({ paymentStatus: 'PAID', status: 'CANCELLED' });
+      expect(mail.sendOrderPaid).not.toHaveBeenCalled();
+    });
+
+    it('trims the key secret before verifying', async () => {
+      process.env.RAZORPAY_KEY_SECRET = `  ${SECRET}\n`;
+      await expect(make(rzpOrder()).verify(body())).resolves.toEqual({ ok: true, status: 'PAID' });
+    });
+
+    it('whitespace-only key secret is treated as unset', async () => {
+      process.env.RAZORPAY_KEY_SECRET = '   ';
+      const forged = createHmac('sha256', '   ').update('order_abc|pay_1').digest('hex');
+      await expect(make(rzpOrder()).verify(body({ signature: forged }))).rejects.toBeInstanceOf(ServiceUnavailableException);
     });
 
     it('rejects a bad signature (wrong value, wrong length, wrong secret) and does not mark paid', async () => {

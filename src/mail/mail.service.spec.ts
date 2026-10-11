@@ -100,12 +100,14 @@ describe('MailService', () => {
     });
 
     it('customer failure does not stop the admin mail, and vice versa', async () => {
-      const o2: any = paidOrder();
-      let n = 0;
-      Object.defineProperty(o2, 'items', { get() { if (++n === 2) throw new Error('admin only'); return []; } });
-      const send2 = jest.fn(async () => ({ data: {}, error: null }));
-      await mk(send2, 'admin@x.com').sendOrderPaid(o2);
-      expect(send2.mock.calls.map((c: any) => c[0].to)).toEqual(['c@x.com']);
+      // Admin delivery fails (keyed on the recipient, not on template internals): customer mail is unaffected.
+      const send2 = jest.fn(async (_m: any) => ({ data: {}, error: null }));
+      send2.mockImplementation(async (m: any) => {
+        if (m.to === 'admin@x.com') throw new Error('admin only');
+        return { data: {}, error: null };
+      });
+      await expect(mk(send2, 'admin@x.com').sendOrderPaid(paidOrder())).resolves.toBeUndefined();
+      expect(send2.mock.calls.map((c: any) => c[0].to)).toEqual(['c@x.com', 'admin@x.com']);
 
       const send3 = jest.fn(async () => ({ data: {}, error: null }));
       send3.mockImplementationOnce(async () => { throw new Error('provider down'); });
@@ -148,7 +150,7 @@ describe('MailService', () => {
 
     it('sendOrderPlaced: customer mail failure does not stop the admin mail, and vice versa', async () => {
       process.env.ADMIN_NOTIFY_EMAIL = 'admin@x.com';
-      const send = jest.fn(async () => ({ data: {}, error: null }));
+      const send = jest.fn(async (_m?: any) => ({ data: {}, error: null }));
       const svc = new MailService();
       (svc as any).client = { emails: { send } };
       (svc as any).admin = 'admin@x.com';
@@ -158,11 +160,12 @@ describe('MailService', () => {
       expect(send.mock.calls.map((c: any) => c[0].to)).toEqual(['admin@x.com']);
 
       send.mockClear();
-      const o2: any = order();
-      let n = 0;
-      Object.defineProperty(o2, 'items', { get() { if (++n > 0 && n === 2) throw new Error('admin only'); return []; } });
-      await svc.sendOrderPlaced(o2);
-      expect(send.mock.calls.map((c: any) => c[0].to)).toEqual(['c@x.com']);
+      send.mockImplementation(async (m: any) => {
+        if (m.to === 'admin@x.com') throw new Error('admin only');
+        return { data: {}, error: null };
+      });
+      await expect(svc.sendOrderPlaced(order())).resolves.toBeUndefined();
+      expect(send.mock.calls.map((c: any) => c[0].to)).toEqual(['c@x.com', 'admin@x.com']);
     });
   });
 });

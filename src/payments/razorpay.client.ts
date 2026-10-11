@@ -16,8 +16,8 @@ export class RazorpaySdkClient implements RazorpayClient {
 
   async createOrder(amountPaise: number, receipt: string): Promise<{ id: string }> {
     this.sdk ??= new Razorpay({
-      key_id: process.env.RAZORPAY_KEY_ID ?? '',
-      key_secret: process.env.RAZORPAY_KEY_SECRET ?? '',
+      key_id: (process.env.RAZORPAY_KEY_ID ?? '').trim(),
+      key_secret: (process.env.RAZORPAY_KEY_SECRET ?? '').trim(),
     });
     const o = await this.sdk.orders.create({ amount: amountPaise, currency: 'INR', receipt });
     return { id: o.id };

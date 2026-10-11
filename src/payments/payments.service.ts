@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  BadGatewayException,
   Inject,
   Injectable,
   Logger,
@@ -55,19 +56,32 @@ export class PaymentsService {
       );
     }
 
-    const keyId = process.env.RAZORPAY_KEY_ID;
-    if (!keyId) throw new ServiceUnavailableException('Online payments are not configured');
+    // This order was created as an online order; COD<->online switching happens only via the
+    // dedicated endpoint, never as a side effect of opening the payment flow.
+    if (order.paymentMethod !== 'RAZORPAY') throw new BadRequestException('This order is cash on delivery');
+
+    const keyId = envTrim('RAZORPAY_KEY_ID');
+    if (!keyId || !envTrim('RAZORPAY_KEY_SECRET')) {
+      throw new ServiceUnavailableException('Online payments are not configured');
+    }
 
     // Razorpay wants integer paise; Math.round absorbs float error (e.g. 19.99 * 3).
     const amount = Math.round(order.total * 100);
     let rzpOrderId: string | null = order.razorpayOrderId;
     if (!rzpOrderId) {
-      const created = await this.rzp.createOrder(amount, `order_${order.id}`);
+      let created: { id: string };
+      try {
+        created = await this.rzp.createOrder(amount, `order_${order.id}`);
+      } catch (err) {
+        // err.message only: provider error objects can carry request/response details.
+        this.log.error(`razorpay createOrder failed for order ${order.id}: ${err instanceof Error ? err.message : 'unknown error'}`);
+        throw new BadGatewayException('Payment provider unavailable, please retry');
+      }
       // Guarded write: if a concurrent request stored an id first, use theirs
       // (our extra Razorpay order is simply never paid).
       const stored = await this.prisma.order.updateMany({
         where: { id: order.id, razorpayOrderId: null },
-        data: { razorpayOrderId: created.id, paymentMethod: 'RAZORPAY' },
+        data: { razorpayOrderId: created.id },
       });
       if (stored.count === 1) {
         rzpOrderId = created.id;
@@ -75,8 +89,6 @@ export class PaymentsService {
         const latest = await this.prisma.order.findUnique({ where: { id: order.id } });
         rzpOrderId = latest?.razorpayOrderId ?? created.id;
       }
-    } else if (order.paymentMethod !== 'RAZORPAY') {
-      await this.prisma.order.update({ where: { id: order.id }, data: { paymentMethod: 'RAZORPAY' } });
     }
 
     return {
@@ -104,18 +116,25 @@ export class PaymentsService {
    * UNPAID/FAILED -> PAID; only that caller sends mail.
    */
   async markPaid(orderId: number, razorpayPaymentId: string): Promise<MarkPaidResult> {
-    const flipped = await this.prisma.order.updateMany({
-      where: { id: orderId, paymentStatus: { in: ['UNPAID', 'FAILED'] } },
-      data: { paymentStatus: 'PAID', razorpayPaymentId, paidAt: new Date() },
+    // Both guarded writes commit together: a crash between them can no longer leave an
+    // order paymentStatus=PAID but status=PENDING (a retry would see ALREADY_PAID and never fix it).
+    const won = await this.prisma.$transaction(async (tx: any) => {
+      const flipped = await tx.order.updateMany({
+        where: { id: orderId, paymentStatus: { in: ['UNPAID', 'FAILED'] } },
+        data: { paymentStatus: 'PAID', razorpayPaymentId, paidAt: new Date() },
+      });
+      if (flipped.count !== 1) return false;
+      // Only a still-PENDING order advances to PAID; SHIPPED/COMPLETED stay put and
+      // CANCELLED stays CANCELLED (guarded, so a concurrent cancel is not overwritten).
+      await tx.order.updateMany({
+        where: { id: orderId, status: 'PENDING' },
+        data: { status: 'PAID' },
+      });
+      return true;
     });
-    if (flipped.count !== 1) return 'ALREADY_PAID';
+    if (!won) return 'ALREADY_PAID';
 
-    // Only a still-PENDING order advances to PAID; SHIPPED/COMPLETED stay put and
-    // CANCELLED stays CANCELLED (guarded, so a concurrent cancel is not overwritten).
-    await this.prisma.order.updateMany({
-      where: { id: orderId, status: 'PENDING' },
-      data: { status: 'PAID' },
-    });
+    // Read + mail only after the commit.
 
     const fresh = await this.prisma.order.findUnique({ where: { id: orderId }, include: this.include });
     if (!fresh) return 'PAID';
@@ -198,13 +217,15 @@ export class PaymentsService {
     if (!order || !order.razorpayOrderId || order.razorpayOrderId !== input.razorpayOrderId) {
       throw new BadRequestException('Order mismatch');
     }
-    const secret = process.env.RAZORPAY_KEY_SECRET ?? '';
+    const secret = envTrim('RAZORPAY_KEY_SECRET');
     // Never HMAC with an empty secret: anyone could forge that signature.
     if (!secret) throw new ServiceUnavailableException('Online payments are not configured');
     if (!this.signatureOk(`${input.razorpayOrderId}|${input.razorpayPaymentId}`, input.signature, secret)) {
       throw new BadRequestException('Payment signature invalid');
     }
-    await this.markPaid(input.orderId, input.razorpayPaymentId);
-    return { ok: true as const, status: 'PAID' as const };
+    const result = await this.markPaid(input.orderId, input.razorpayPaymentId);
+    // Paid after the order was cancelled: tell the storefront so it can say a refund will follow.
+    const status: 'PAID' | 'CANCELLED' = result === 'PAID_AFTER_CANCEL' ? 'CANCELLED' : 'PAID';
+    return { ok: true as const, status };
   }
 }

@@ -50,9 +50,25 @@ describe('Payments (e2e)', () => {
     expect(none.status).toBe(403);
   });
 
-  it('order: an unknown order id gets 403/404, never 500', async () => {
+  it('order: an unknown order id gets exactly 403 (same as not-yours), never 500', async () => {
     const res = await post('/payments/razorpay/order').send({ orderId: 2147483000, email });
-    expect([403, 404]).toContain(res.status);
+    expect(res.status).toBe(403);
+  });
+
+  it('order: a cash-on-delivery order gets 400 and stays COD', async () => {
+    const cod = await prisma.order.create({
+      data: { total: 100, subtotal: 100, status: 'PENDING', paymentMethod: 'COD', customerName: 'E2E', customerEmail: email, customerPhone: '9354016059' },
+    });
+    try {
+      const res = await post('/payments/razorpay/order').send({ orderId: cod.id, email });
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe('This order is cash on delivery');
+      const after = await prisma.order.findUnique({ where: { id: cod.id } });
+      expect(after).toMatchObject({ paymentMethod: 'COD', razorpayOrderId: null });
+      expect(fake.createOrder).not.toHaveBeenCalled();
+    } finally {
+      await prisma.order.deleteMany({ where: { id: cod.id } });
+    }
   });
 
   it('order: invalid bodies get 400', async () => {

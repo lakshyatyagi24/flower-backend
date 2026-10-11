@@ -118,7 +118,7 @@ model Order {
   razorpayOrderId   String?       @unique
   razorpayPaymentId String?       @unique
   paidAt            DateTime?
-  // Internal-only (manual refund bookkeeping) — never returned to customers.
+  // Internal-only (manual refund bookkeeping) - never returned to customers.
   refundNote        String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
