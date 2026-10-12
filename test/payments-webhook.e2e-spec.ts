@@ -156,11 +156,15 @@ describe('Razorpay webhook (e2e)', () => {
     expect((await row(o.id))!.paymentStatus).toBe('UNPAID');
   });
 
-  it('an amount mismatch is NOT marked paid (200, flagged for manual review)', async () => {
+  it('an amount mismatch is NOT marked paid, but is traced (paymentId + refundNote) (stale-job interaction is covered in stale-orders.e2e)', async () => {
     const o = await makeOrder();
-    const raw = bodyOf('payment.captured', o.rzp, 'pay_short', 5000);
+    const raw = bodyOf('payment.captured', o.rzp, `pay_short_${tag}`, 5000);
     await deliver(raw, sign(raw)).expect(200);
-    expect(await row(o.id)).toMatchObject({ paymentStatus: 'UNPAID', status: 'PENDING', razorpayPaymentId: null });
+    const after = await row(o.id);
+    expect(after).toMatchObject({ paymentStatus: 'UNPAID', status: 'PENDING', razorpayPaymentId: `pay_short_${tag}` });
+    expect(after!.refundNote).toBe(
+      `AMOUNT MISMATCH: payment pay_short_${tag} captured 5000 vs expected 10000 - review/refund manually`,
+    );
     expect(mail.sendOrderPaid).not.toHaveBeenCalled();
   });
 });

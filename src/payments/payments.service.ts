@@ -205,6 +205,22 @@ export class PaymentsService {
       this.log.warn(
         `webhook ${event} amount mismatch for order ${order.id}: got ${String(payment.amount)} paise, expected ${expectedPaise}; NOT marked paid, review manually`,
       );
+      // Persist a trace WITHOUT touching status/paymentStatus. Setting razorpayPaymentId also makes
+      // the stale-order job skip this order (it requires null), and refundNote surfaces it to the admin.
+      try {
+        await this.prisma.order.updateMany({
+          where: { id: order.id, razorpayPaymentId: null },
+          data: {
+            razorpayPaymentId: paymentId,
+            refundNote: `AMOUNT MISMATCH: payment ${paymentId} captured ${String(payment.amount)} vs expected ${expectedPaise} - review/refund manually`,
+          },
+        });
+      } catch (err) {
+        // e.g. unique violation on razorpayPaymentId; never fail the 200 to Razorpay.
+        this.log.warn(
+          `could not persist amount-mismatch trace for order ${order.id}: ${err instanceof Error ? err.message : 'unknown error'}`,
+        );
+      }
       return { ok: true };
     }
     const result = await this.markPaid(order.id, paymentId);

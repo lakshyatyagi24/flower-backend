@@ -404,6 +404,33 @@ describe('PaymentsService', () => {
       }
     });
 
+    it('amount mismatch persists a trace (paymentId + refundNote) without changing status/paymentStatus', async () => {
+      const b = raw(evt('payment.captured', { amount: 100 }));
+      const order = wOrder();
+      await expect(call(order, b, sigOf(b))).resolves.toEqual({ ok: true });
+      expect(order.paymentStatus).toBe('UNPAID');
+      expect(order.status).toBe('PENDING');
+      expect(order.razorpayPaymentId).toEqual(expect.any(String));
+      expect(order.refundNote).toBe(
+        `AMOUNT MISMATCH: payment ${order.razorpayPaymentId} captured 100 vs expected 124950 - review/refund manually`,
+      );
+    });
+
+    it('amount mismatch trace is guarded: never overwrites an existing razorpayPaymentId', async () => {
+      const b = raw(evt('payment.captured', { amount: 100 }));
+      const order = wOrder({ razorpayPaymentId: 'pay_existing' });
+      await expect(call(order, b, sigOf(b))).resolves.toEqual({ ok: true });
+      expect(order.razorpayPaymentId).toBe('pay_existing');
+      expect(order.refundNote).toBeUndefined();
+    });
+
+    it('amount mismatch trace: a unique-constraint failure is caught and the webhook still returns ok', async () => {
+      const b = raw(evt('payment.captured', { amount: 100 }));
+      const prisma = fakePrisma(wOrder());
+      prisma.order.updateMany.mockRejectedValue(Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }));
+      await expect(makeWith(prisma).handleWebhook(b, sigOf(b))).resolves.toEqual({ ok: true });
+    });
+
     it('payment.failed sets FAILED only while UNPAID; never downgrades PAID/REFUNDED', async () => {
       const b = raw(evt('payment.failed'));
       const o1 = wOrder();
