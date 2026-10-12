@@ -11,9 +11,6 @@ const DEFAULTS: Record<string, string> = {
   'store.gstin': '',
   'shipping.flatRate': '99',
   'shipping.freeThreshold': '1499',
-  'payment.stripeKey': '',
-  'payment.razorpayKeyId': '',
-  'payment.razorpayKeySecret': '',
 };
 
 @Injectable()

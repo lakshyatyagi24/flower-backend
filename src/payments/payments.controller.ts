@@ -1,15 +1,23 @@
-import { Body, Controller, Headers, HttpCode, Post, RawBodyRequest, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Post, RawBodyRequest, Req, UseGuards } from '@nestjs/common';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { OptionalJwtAuthGuard } from '../auth/auth.guard';
 import { JwtPayload } from '../auth/jwt.util';
 import { PaymentsService } from './payments.service';
+import { isOnlinePaymentsEnabled } from './config';
 import { CreateRzpOrderDto } from './dto/create-rzp-order.dto';
 import { VerifyDto } from './dto/verify.dto';
 
 @Controller('payments/razorpay')
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
+
+  /** Public: lets the storefront hide online payment when keys are not configured. No secrets, no key id. */
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('config')
+  config() {
+    return { enabled: isOnlinePaymentsEnabled() };
+  }
 
   @UseGuards(OptionalJwtAuthGuard)
   @Throttle({ default: { limit: 20, ttl: 60_000 } })

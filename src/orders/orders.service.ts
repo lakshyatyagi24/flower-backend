@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizeIndianPhone } from '../common/validators';
 import { MailService } from '../mail/mail.service';
+import { isOnlinePaymentsEnabled } from '../payments/config';
 import { joinRefundNote, splitRefundNote } from './refund-note';
 
 interface OrderItemInput {
@@ -102,6 +103,10 @@ export class OrdersService {
     // DTO covers shape; these catch whitespace-only values it cannot.
     if (!input.customerName.trim()) throw new BadRequestException('Customer name is required');
     if (!input.shippingAddress.trim()) throw new BadRequestException('Shipping address is required');
+
+    if (input.paymentMethod === 'RAZORPAY' && !isOnlinePaymentsEnabled()) {
+      throw new BadRequestException('Online payments are currently unavailable. Please choose cash on delivery.');
+    }
 
     const productIds = input.items.map((i) => i.productId);
     type ProductRow = {
@@ -219,10 +224,15 @@ export class OrdersService {
     return this.forCustomer(created);
   }
 
-  /** refundNote is owner-only bookkeeping; never returned to customer-facing endpoints. */
-  private forCustomer<T extends { refundNote?: unknown }>(order: T): Omit<T, 'refundNote'> {
+  /**
+   * Owner-only bookkeeping and provider references never reach customer-facing endpoints (same set
+   * track() strips). The checkout gets its Razorpay order id from POST /payments/razorpay/order.
+   */
+  private forCustomer<T extends Record<string, unknown>>(
+    order: T,
+  ): Omit<T, 'adminNotes' | 'refundNote' | 'razorpayOrderId' | 'razorpayPaymentId'> {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { refundNote: _refundNote, ...rest } = order;
+    const { adminNotes: _a, refundNote: _r, razorpayOrderId: _o, razorpayPaymentId: _p, ...rest } = order;
     return rest;
   }
 
@@ -281,9 +291,7 @@ export class OrdersService {
       throw new ConflictException('Order can no longer be switched to cash on delivery');
     }
     if (!fresh) throw new ConflictException('Order can no longer be switched to cash on delivery');
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { razorpayOrderId: _o, razorpayPaymentId: _p, ...safe } = this.forCustomer(fresh);
-    return safe;
+    return this.forCustomer(fresh);
   }
 
   async listMine(userId: number) {
@@ -523,7 +531,15 @@ export class OrdersService {
       this.prisma.order.count(),
       this.prisma.product.count(),
       this.prisma.user.count({ where: { role: 'CUSTOMER' } }),
-      this.prisma.order.aggregate({ _sum: { total: true } }),
+      // Real sales only: not cancelled/refunded, and either cash on delivery or actually paid online.
+      this.prisma.order.aggregate({
+        _sum: { total: true },
+        where: {
+          status: { not: 'CANCELLED' },
+          paymentStatus: { not: 'REFUNDED' },
+          OR: [{ paymentMethod: 'COD' }, { paymentStatus: 'PAID' }],
+        },
+      }),
       this.prisma.order.findMany({
         orderBy: { createdAt: 'desc' },
         take: 5,

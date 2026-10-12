@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 
 function makeFakes(existingStatus = 'PAID') {
@@ -40,6 +40,16 @@ const input = {
 };
 
 describe('OrdersService mail hooks', () => {
+  const savedKeys = { id: process.env.RAZORPAY_KEY_ID, secret: process.env.RAZORPAY_KEY_SECRET };
+  beforeEach(() => {
+    process.env.RAZORPAY_KEY_ID = 'rzp_test_x';
+    process.env.RAZORPAY_KEY_SECRET = 'sec';
+  });
+  afterEach(() => {
+    if (savedKeys.id === undefined) delete process.env.RAZORPAY_KEY_ID; else process.env.RAZORPAY_KEY_ID = savedKeys.id;
+    if (savedKeys.secret === undefined) delete process.env.RAZORPAY_KEY_SECRET; else process.env.RAZORPAY_KEY_SECRET = savedKeys.secret;
+  });
+
   it('create sends order-placed once with the created order', async () => {
     const { svc, mail } = makeFakes();
     const created = await svc.create(null, input);
@@ -73,16 +83,54 @@ describe('OrdersService mail hooks', () => {
     expect(res.paymentStatus).toBe('PAID');
   });
 
-  it('getMine and listMine never expose refundNote but keep razorpayOrderId', async () => {
+  it('getMine, listMine and create never expose adminNotes, refundNote or razorpay ids', async () => {
     const { svc, prisma } = makeFakes();
-    const row = { id: 5, userId: 9, razorpayOrderId: 'order_1', refundNote: 'x', items: [] };
+    const row = {
+      id: 5, userId: 9, razorpayOrderId: 'order_1', razorpayPaymentId: 'pay_1', refundNote: 'x', adminNotes: 'secret',
+      paymentStatus: 'PAID', items: [],
+    };
     prisma.order.findUnique.mockResolvedValue(row);
     prisma.order.findMany = jest.fn(async () => [row]);
+    const hidden = ['adminNotes', 'refundNote', 'razorpayOrderId', 'razorpayPaymentId'];
     const one: any = await svc.getMine(9, 5);
-    expect(one).not.toHaveProperty('refundNote');
-    expect(one.razorpayOrderId).toBe('order_1');
     const list: any = await svc.listMine(9);
-    expect(list[0]).not.toHaveProperty('refundNote');
+    for (const k of hidden) {
+      expect(one).not.toHaveProperty(k);
+      expect(list[0]).not.toHaveProperty(k);
+    }
+    expect(one.paymentStatus).toBe('PAID');
+  });
+
+  describe('online payments switch', () => {
+    const MSG = 'Online payments are currently unavailable. Please choose cash on delivery.';
+    const setKeys = (id?: string, secret?: string) => {
+      if (id === undefined) delete process.env.RAZORPAY_KEY_ID; else process.env.RAZORPAY_KEY_ID = id;
+      if (secret === undefined) delete process.env.RAZORPAY_KEY_SECRET; else process.env.RAZORPAY_KEY_SECRET = secret;
+    };
+
+    it('create rejects paymentMethod RAZORPAY with 400 when keys are unset/blank and creates nothing', async () => {
+      for (const [id, secret] of [[undefined, undefined], ['rzp_test_x', undefined], ['  ', '  ']] as const) {
+        setKeys(id, secret);
+        const { svc, prisma } = makeFakes();
+        const err: any = await svc.create(null, { ...input, paymentMethod: 'RAZORPAY' }).catch((e) => e);
+        expect(err).toBeInstanceOf(BadRequestException);
+        expect(err.message).toBe(MSG);
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+        expect(prisma.product.findMany).not.toHaveBeenCalled();
+      }
+    });
+
+    it('create still accepts COD (explicit or default) when disabled', async () => {
+      setKeys(undefined, undefined);
+      const { svc } = makeFakes();
+      await expect(svc.create(null, { ...input, paymentMethod: 'COD' })).resolves.toMatchObject({ id: 5 });
+      await expect(svc.create(null, input)).resolves.toMatchObject({ id: 5 });
+    });
+
+    it('create accepts RAZORPAY when both keys are set', async () => {
+      const { svc } = makeFakes();
+      await expect(svc.create(null, { ...input, paymentMethod: 'RAZORPAY' })).resolves.toMatchObject({ id: 5 });
+    });
   });
 
   it('create does not fail when the mail promise rejects', async () => {
@@ -475,7 +523,7 @@ describe('OrdersService.listAll / stats payment filters', () => {
       user: { count: jest.fn(async () => 0) },
       enquiry: { count: jest.fn(async () => 0) },
     };
-    return { svc: new OrdersService(prisma, {} as any), findMany, count };
+    return { svc: new OrdersService(prisma, {} as any), findMany, count, aggregate: prisma.order.aggregate as jest.Mock };
   }
   const whereOf = (findMany: jest.Mock) => findMany.mock.calls[0][0].where;
 
@@ -500,6 +548,22 @@ describe('OrdersService.listAll / stats payment filters', () => {
     await svc.listAll({ attention: a, status: 'PENDING' } as any);
     expect(whereOf(findMany)).toEqual({ status: 'PENDING', AND: [cond] });
     expect(count.mock.calls[0][0].where).toEqual(whereOf(findMany));
+  });
+
+  it('stats revenue sums only real sales: not cancelled, not refunded, and COD or actually paid', async () => {
+    const { svc, aggregate } = setup();
+    aggregate.mockResolvedValue({ _sum: { total: 1234.5 } });
+    const res: any = await svc.stats();
+    expect(res.revenue).toBe(1234.5);
+    expect(aggregate).toHaveBeenCalledTimes(1);
+    expect(aggregate).toHaveBeenCalledWith({
+      _sum: { total: true },
+      where: {
+        status: { not: 'CANCELLED' },
+        paymentStatus: { not: 'REFUNDED' },
+        OR: [{ paymentMethod: 'COD' }, { paymentStatus: 'PAID' }],
+      },
+    });
   });
 
   it('keeps take/skip clamping', async () => {
