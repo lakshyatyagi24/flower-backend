@@ -275,7 +275,7 @@ async function seedCutFlowers(prisma) {
     update: {
       name: cutFlowerCategory.name,
       // image intentionally NOT updated — preserve any Cloudinary image set later.
-      description: cutFlowerCategory.description,
+      // description intentionally NOT updated: admin edits survive re-seeding.
       productType: cutFlowerCategory.productType,
       defaultSaleMode: cutFlowerCategory.defaultSaleMode,
       defaultGstRate: cutFlowerCategory.defaultGstRate,

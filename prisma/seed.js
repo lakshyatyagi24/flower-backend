@@ -5,6 +5,7 @@
 const path = require('path');
 const { scryptSync, randomBytes } = require('crypto');
 const { seedCutFlowers } = require('./data/cut-flowers');
+const { applyTaxonomy } = require('./data/seed-taxonomy');
 
 function loadPrisma() {
   try {
@@ -107,7 +108,7 @@ async function main() {
       create: c,
       update: {
         name: c.name,
-        description: c.description,
+        // description intentionally NOT updated: admin edits survive re-seeding (see data/seed-taxonomy.js).
         productType: c.productType,
         defaultSaleMode: c.defaultSaleMode,
         defaultGstRate: c.defaultGstRate,
@@ -135,6 +136,13 @@ async function main() {
   // Seed cut flowers (real catalogue from theflora snapshot).
   const cutFlowers = await seedCutFlowers(prisma);
   console.log(`Seeded ${cutFlowers.count} cut-flower products under '${cutFlowers.category.slug}'`);
+
+  // Editorial category descriptions and occasion tags: only fills EMPTY values (never overwrites admin edits).
+  const taxonomy = await applyTaxonomy(prisma);
+  console.log(
+    `Taxonomy: ${taxonomy.descriptions} category description(s) set, ${taxonomy.tagged} product(s) tagged`,
+    JSON.stringify(taxonomy.perTag),
+  );
 
   // Default store settings — placeholders, to be overwritten by the admin
   // via the settings page once they share their real contact details.
