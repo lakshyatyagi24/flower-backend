@@ -19,7 +19,9 @@ export class RazorpaySdkClient implements RazorpayClient {
       key_id: (process.env.RAZORPAY_KEY_ID ?? '').trim(),
       key_secret: (process.env.RAZORPAY_KEY_SECRET ?? '').trim(),
     });
-    const o = await this.sdk.orders.create({ amount: amountPaise, currency: 'INR', receipt });
+    // payment_capture: capture automatically in code; do not depend on a dashboard setting (on manual
+    // capture, an authorized-only payment would pass verify, never be captured, and be auto-refunded).
+    const o = await this.sdk.orders.create({ amount: amountPaise, currency: 'INR', receipt, payment_capture: true });
     return { id: o.id };
   }
 }

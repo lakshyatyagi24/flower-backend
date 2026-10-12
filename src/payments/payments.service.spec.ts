@@ -1,4 +1,4 @@
-import { BadGatewayException, BadRequestException, ForbiddenException, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, ConflictException, ForbiddenException, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { createHmac } from 'crypto';
 import { PaymentsService } from './payments.service';
 
@@ -220,9 +220,9 @@ describe('PaymentsService', () => {
       expect(order.paymentStatus).toBe('PAID');
     });
 
-    it('refuses a COD order (defence in depth): ALREADY_PAID, nothing flipped, no mail', async () => {
+    it('refuses a COD order (defence in depth): CAPTURED_AFTER_SWITCH, nothing flipped, no mail', async () => {
       const order = baseOrder({ paymentMethod: 'COD' });
-      await expect(make(order).markPaid(7, 'pay_cod')).resolves.toBe('ALREADY_PAID');
+      await expect(make(order).markPaid(7, 'pay_cod')).resolves.toBe('CAPTURED_AFTER_SWITCH');
       expect(order).toMatchObject({ paymentStatus: 'UNPAID', status: 'PENDING', razorpayPaymentId: null });
       expect(mail.sendOrderPaid).not.toHaveBeenCalled();
     });
@@ -287,6 +287,21 @@ describe('PaymentsService', () => {
       await expect(make(order).verify(body())).resolves.toEqual({ ok: true, status: 'CANCELLED' });
       expect(order).toMatchObject({ paymentStatus: 'PAID', status: 'CANCELLED' });
       expect(mail.sendOrderPaid).not.toHaveBeenCalled();
+    });
+
+    it('verify on an order switched to COD mid-flight returns status COD, traces the payment, keeps COD/UNPAID', async () => {
+      // the row race: verify read the order as RAZORPAY, the switch-to-COD CAS then won before markPaid
+      const order = rzpOrder({ paymentMethod: 'COD', refundNote: 'Switched to COD; abandoned Razorpay order order_abc' });
+      const svc = make(order);
+      await expect(svc.verify(body())).resolves.toEqual({ ok: true, status: 'COD' });
+      await expect(svc.verify(body())).resolves.toEqual({ ok: true, status: 'COD' });
+      expect(order.refundNote.match(/CAPTURED AFTER SWITCH TO COD/g)).toHaveLength(1);
+      expect(order).toMatchObject({ paymentMethod: 'COD', paymentStatus: 'UNPAID', status: 'PENDING' });
+      expect(mail.sendOrderPaid).not.toHaveBeenCalled();
+    });
+
+    it('verify never says PAID for an ALREADY_PAID result unless the order really is paid online', async () => {
+      await expect(make(rzpOrder({ paymentStatus: 'REFUNDED' })).verify(body())).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('trims the key secret before verifying', async () => {
@@ -546,15 +561,44 @@ describe('PaymentsService', () => {
       expect(order.refundNote).not.toContain('PAYMENT');
     });
 
-    it('markPaid ALREADY_PAID on a non-RAZORPAY order warns with order and payment id', async () => {
+    it('markPaid on a non-RAZORPAY order traces the payment, warns with order and payment id', async () => {
       const order = baseOrder({ paymentMethod: 'COD' });
-      await expect(make(order).markPaid(7, 'pay_cod2')).resolves.toBe('ALREADY_PAID');
+      await expect(make(order).markPaid(7, 'pay_cod2')).resolves.toBe('CAPTURED_AFTER_SWITCH');
+      expect(order.refundNote).toBe('PAYMENT pay_cod2 CAPTURED AFTER SWITCH TO COD - REFUND');
       const msg = warnSpy.mock.calls.map((c) => String(c[0])).find((m) => m.includes('pay_cod2'));
       expect(msg).toBeDefined();
-      expect(msg).toContain('order 7 ');
+      expect(msg).toContain('order 7');
     });
 
-    it('markPaid ALREADY_PAID on a RAZORPAY order does not warn', async () => {
+    it('COD-switched order (guarded flip loses): trace appended ONCE (idempotent), status/paymentStatus untouched', async () => {
+      const order = baseOrder({ paymentMethod: 'COD', refundNote: 'Switched to COD; abandoned Razorpay order order_old' });
+      const svc = make(order);
+      await expect(svc.markPaid(7, 'pay_late')).resolves.toBe('CAPTURED_AFTER_SWITCH');
+      await expect(svc.markPaid(7, 'pay_late')).resolves.toBe('CAPTURED_AFTER_SWITCH');
+      expect(order.refundNote).toBe(
+        'Switched to COD; abandoned Razorpay order order_old\nPAYMENT pay_late CAPTURED AFTER SWITCH TO COD - REFUND',
+      );
+      expect(order).toMatchObject({ status: 'PENDING', paymentStatus: 'UNPAID', paymentMethod: 'COD', razorpayPaymentId: null });
+      expect(mail.sendOrderPaid).not.toHaveBeenCalled();
+    });
+
+    it('markPaid trace: exhausted CAS attempts log the order and payment ids, still resolves', async () => {
+      const prisma = fakePrisma(baseOrder({ paymentMethod: 'COD', refundNote: 'x' }));
+      prisma.order.updateMany.mockResolvedValue({ count: 0 });
+      await expect(makeWith(prisma).markPaid(7, 'pay_z')).resolves.toBe('CAPTURED_AFTER_SWITCH');
+      const msgs = warnSpy.mock.calls.map((c) => String(c[0]));
+      expect(msgs).toContain('post-switch capture NOT traced: payment pay_z on order 7; refund manually');
+    });
+
+    it('markPaid trace: a thrown error logs the ids too and does not propagate', async () => {
+      const prisma = fakePrisma(baseOrder({ paymentMethod: 'COD' }));
+      const find = prisma.order.findUnique.getMockImplementation()!;
+      prisma.order.findUnique.mockImplementationOnce(find).mockRejectedValueOnce(new Error('db down'));
+      await expect(makeWith(prisma).markPaid(7, 'pay_e')).resolves.toBe('CAPTURED_AFTER_SWITCH');
+      expect(warnSpy.mock.calls.map((c) => String(c[0]))).toContain('post-switch capture NOT traced: payment pay_e on order 7; refund manually');
+    });
+
+    it('markPaid ALREADY_PAID on a paid RAZORPAY order does not warn', async () => {
       const order = baseOrder({ paymentStatus: 'PAID' });
       await expect(make(order).markPaid(7, 'pay_dup')).resolves.toBe('ALREADY_PAID');
       expect(warnSpy).not.toHaveBeenCalled();

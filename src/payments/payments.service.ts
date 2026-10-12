@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   BadGatewayException,
+  ConflictException,
   Inject,
   Injectable,
   Logger,
@@ -12,8 +13,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { RAZORPAY_CLIENT, RazorpayClient } from './razorpay.client';
 
-/** Env value, trimmed; whitespace-only counts as unset. */
-const envTrim = (name: string): string => (process.env[name] ?? '').trim();
+import { envTrim } from './config';
 
 interface WebhookPayment {
   id?: unknown;
@@ -21,7 +21,12 @@ interface WebhookPayment {
   amount?: unknown;
 }
 
-export type MarkPaidResult = 'PAID' | 'ALREADY_PAID' | 'PAID_AFTER_CANCEL';
+/**
+ * CAPTURED_AFTER_SWITCH: a real capture landed on an order that is no longer online (switched to COD).
+ * Nothing about the order's status changes; a refund trace is persisted for the owner.
+ */
+export type VerifyStatus = 'PAID' | 'CANCELLED' | 'COD';
+export type MarkPaidResult = 'PAID' | 'ALREADY_PAID' | 'PAID_AFTER_CANCEL' | 'CAPTURED_AFTER_SWITCH';
 
 @Injectable()
 export class PaymentsService {
@@ -135,10 +140,16 @@ export class PaymentsService {
       return true;
     });
     if (!won) {
-      // A capture landing on a non-online order (e.g. COD after an abandoned online attempt) needs eyes.
+      // A capture landing on a non-online order (e.g. COD after an abandoned online attempt): the customer
+      // has paid but the order will not be marked paid. Persist a refund trace (status untouched).
       const current = await this.prisma.order.findUnique({ where: { id: orderId } });
       if (current && current.paymentMethod !== 'RAZORPAY') {
-        this.log.warn(`order ${orderId} is ${String(current.paymentMethod)} but payment ${razorpayPaymentId} was captured; refund manually`);
+        await this.appendCaptureTrace(
+          () => this.prisma.order.findUnique({ where: { id: orderId } }),
+          razorpayPaymentId,
+          `order ${orderId}`,
+        );
+        return 'CAPTURED_AFTER_SWITCH';
       }
       return 'ALREADY_PAID';
     }
@@ -240,42 +251,52 @@ export class PaymentsService {
     return { ok: true };
   }
 
+  private logNotTraced(where: string, paymentId: string) {
+    // ids only: never the body, signature or secrets
+    this.log.warn(`post-switch capture NOT traced: payment ${paymentId} on ${where}; refund manually`);
+  }
+
   /**
    * A payment captured on a Razorpay order that was abandoned by switching to COD (the id was nulled,
    * so lookup by razorpayOrderId finds nothing). Find the order by the marker switchToCod left in its
    * refundNote and append a refund trace exactly once. Changes nothing but refundNote; never throws.
    */
-  private logNotTraced(rzpOrderId: string, paymentId: string) {
-    // ids only: never the body, signature or secrets
-    this.log.warn(`post-switch capture NOT traced: payment ${paymentId} on razorpay order ${rzpOrderId}; refund manually`);
-  }
-
   private async traceCaptureAfterCodSwitch(rzpOrderId: string, paymentId: unknown): Promise<void> {
     if (typeof paymentId !== 'string' || !paymentId) return;
+    await this.appendCaptureTrace(
+      () => this.prisma.order.findFirst({ where: { refundNote: { contains: `abandoned Razorpay order ${rzpOrderId}` } } }),
+      paymentId,
+      `razorpay order ${rzpOrderId}`,
+    );
+  }
+
+  /**
+   * Append `PAYMENT <id> CAPTURED AFTER SWITCH TO COD - REFUND` to the located order's refundNote,
+   * idempotently, with a CAS on the note we read (concurrent writers cannot clobber each other). Only
+   * refundNote changes. Never throws: on exhaustion or error the ids are logged so the owner can reconcile.
+   */
+  private async appendCaptureTrace(locate: () => Promise<any | null>, paymentId: string, where: string): Promise<void> {
     try {
       const trace = `PAYMENT ${paymentId} CAPTURED AFTER SWITCH TO COD - REFUND`;
       for (let attempt = 0; attempt < 3; attempt++) {
-        const found = await this.prisma.order.findFirst({
-          where: { refundNote: { contains: `abandoned Razorpay order ${rzpOrderId}` } },
-        });
+        const found = await locate();
         if (!found) return;
-        const note: string = found.refundNote ?? '';
-        if (note.includes(`PAYMENT ${paymentId} `)) return; // idempotent: already traced
-        // CAS on the note we read so two concurrent deliveries cannot both append (or clobber).
+        const existing: string | null = found.refundNote ?? null;
+        if (existing && existing.includes(`PAYMENT ${paymentId} `)) return; // idempotent: already traced
         const res = await this.prisma.order.updateMany({
-          where: { id: found.id, refundNote: found.refundNote },
-          data: { refundNote: `${note}\n${trace}` },
+          where: { id: found.id, refundNote: existing },
+          data: { refundNote: existing ? `${existing}\n${trace}` : trace },
         });
         if (res.count === 1) {
           this.log.warn(`order ${found.id}: payment ${paymentId} captured after switch to COD; refund manually`);
           return;
         }
       }
-      // Attempts exhausted: the webhook still answers 200 (no redelivery), so the ids must be logged.
-      this.logNotTraced(rzpOrderId, paymentId);
+      // Attempts exhausted: the caller still answers normally (no redelivery), so the ids must be logged.
+      this.logNotTraced(where, paymentId);
     } catch (err) {
       this.log.warn(`post-switch capture trace error: ${err instanceof Error ? err.message : 'unknown error'}`);
-      this.logNotTraced(rzpOrderId, paymentId);
+      this.logNotTraced(where, paymentId);
     }
   }
 
@@ -291,8 +312,17 @@ export class PaymentsService {
       throw new BadRequestException('Payment signature invalid');
     }
     const result = await this.markPaid(input.orderId, input.razorpayPaymentId);
-    // Paid after the order was cancelled: tell the storefront so it can say a refund will follow.
-    const status: 'PAID' | 'CANCELLED' = result === 'PAID_AFTER_CANCEL' ? 'CANCELLED' : 'PAID';
-    return { ok: true as const, status };
+    // Report the REAL state: CANCELLED = paid after cancel, COD = captured after a switch to COD (both:
+    // a refund will follow); PAID only when the order really is paid online.
+    if (result === 'PAID_AFTER_CANCEL') return { ok: true as const, status: 'CANCELLED' as VerifyStatus };
+    if (result === 'CAPTURED_AFTER_SWITCH') return { ok: true as const, status: 'COD' as VerifyStatus };
+    if (result === 'ALREADY_PAID') {
+      const fresh = await this.prisma.order.findUnique({ where: { id: input.orderId } });
+      if (!fresh || fresh.paymentMethod !== 'RAZORPAY' || fresh.paymentStatus !== 'PAID') {
+        // e.g. REFUNDED: never claim PAID for an order that is not paid online right now.
+        throw new ConflictException('Order is not in a paid state');
+      }
+    }
+    return { ok: true as const, status: 'PAID' as VerifyStatus };
   }
 }
