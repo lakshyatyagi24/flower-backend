@@ -24,11 +24,26 @@ function make(candidates: Array<{ id: number }>, cancel?: (id: number) => Promis
 describe('StaleOrdersJob', () => {
   let logSpy: jest.SpyInstance;
   let errSpy: jest.SpyInstance;
+  const savedEnv = process.env.NODE_ENV;
   beforeEach(() => {
+    process.env.NODE_ENV = 'production-like'; // jest sets 'test', which disables tick()
     logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation();
     errSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation();
   });
-  afterEach(() => jest.restoreAllMocks());
+  afterEach(() => {
+    process.env.NODE_ENV = savedEnv;
+    jest.restoreAllMocks();
+  });
+
+  it('tick does nothing under NODE_ENV=test and runs the sweep otherwise', async () => {
+    const { job, prisma } = make([]);
+    process.env.NODE_ENV = 'test';
+    await job.tick();
+    expect(prisma.order.findMany).not.toHaveBeenCalled();
+    process.env.NODE_ENV = 'production';
+    await job.tick();
+    expect(prisma.order.findMany).toHaveBeenCalledTimes(1);
+  });
 
   it('TTL is 30 minutes', () => {
     expect(StaleOrdersJob.TTL_MS).toBe(30 * 60 * 1000);
@@ -70,7 +85,7 @@ describe('StaleOrdersJob', () => {
     const { OrdersService } = jest.requireActual('../orders/orders.service');
     const job = new StaleOrdersJob(prisma, new OrdersService(prisma, {} as any));
     await expect(job.run(NOW)).resolves.toBe(0);
-    expect(tx.order.updateMany.mock.calls[0][0].where).toEqual({ id: 9, ...GUARD });
+    expect(tx.order.updateMany.mock.calls[0][0].where).toEqual({ AND: [{ id: 9, status: { not: 'CANCELLED' } }, GUARD] });
     expect(tx.product.update).not.toHaveBeenCalled();
     expect(stock.n).toBe(10);
   });

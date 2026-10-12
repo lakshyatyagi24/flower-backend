@@ -4,6 +4,8 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { MailService } from '../src/mail/mail.service';
 import { createHmac } from 'crypto';
 import { PaymentsService } from '../src/payments/payments.service';
+import { ConflictException } from '@nestjs/common';
+import { OrdersService } from '../src/orders/orders.service';
 import { StaleOrdersJob } from '../src/payments/stale-orders.job';
 import type { INestApplication } from '@nestjs/common';
 
@@ -126,5 +128,28 @@ describe('StaleOrdersJob (e2e)', () => {
       if (saved === undefined) delete process.env.RAZORPAY_WEBHOOK_SECRET; else process.env.RAZORPAY_WEBHOOK_SECRET = saved;
       await prisma.product.update({ where: { id: productId }, data: { stock: 10 } });
     }
+  });
+
+  it('an admin status write based on a stale PENDING read cannot revive a job-cancelled order (real DB)', async () => {
+    const id = await makeOrder();
+    await prisma.product.update({ where: { id: productId }, data: { stock: 5 } }); // 5 units claimed by this order
+    expect(await job.run()).toBeGreaterThanOrEqual(1);
+    expect((await row(id))!.status).toBe('CANCELLED');
+    expect(await stock()).toBe(10);
+
+    const orders = app.get(OrdersService);
+    for (const to of ['SHIPPED', 'PAID']) {
+      // Interleaving: the admin's read (outside the tx) happened before the job's commit.
+      const spy = jest.spyOn(prisma.order, 'findUnique').mockResolvedValueOnce({ id, status: 'PENDING' } as any);
+      await expect(orders.updateStatus(id, to)).rejects.toBeInstanceOf(ConflictException);
+      spy.mockRestore();
+    }
+    const spy2 = jest.spyOn(prisma.order, 'findUnique').mockResolvedValueOnce({ id, status: 'PENDING' } as any);
+    await expect(orders.adminUpdate(id, { status: 'SHIPPED' })).rejects.toBeInstanceOf(ConflictException);
+    spy2.mockRestore();
+
+    expect((await row(id))!.status).toBe('CANCELLED');
+    expect(await stock()).toBe(10); // restocked exactly once
+    await prisma.product.update({ where: { id: productId }, data: { stock: 10 } });
   });
 });

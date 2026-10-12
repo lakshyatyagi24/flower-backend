@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -279,7 +280,8 @@ export class OrdersService {
     extraWhere: Record<string, unknown> = {},
   ): Promise<boolean> {
     const flipped = await tx.order.updateMany({
-      where: { id: orderId, status: { not: 'CANCELLED' }, ...extraWhere },
+      // AND-composed so an extraWhere can never override the id or the CANCELLED guard.
+      where: { AND: [{ id: orderId, status: { not: 'CANCELLED' } }, extraWhere] },
       data: { status: 'CANCELLED' },
     });
     if (flipped.count !== 1) return false;
@@ -298,6 +300,26 @@ export class OrdersService {
     return true;
   }
 
+  /**
+   * Compare-and-set a status change against the status the validation was based on
+   * (`from`). If anyone changed the order since it was read (e.g. the stale-order job
+   * cancelled and restocked it), nothing is written and a Conflict is thrown, so a
+   * cancelled order can never be revived and stock can never be restored twice.
+   */
+  private async transition(tx: any, id: number, from: OrderStatus, to: OrderStatus, data: Record<string, unknown>) {
+    const conflict = () => new ConflictException('Order was changed by someone else — reload and try again');
+    if (to === 'CANCELLED') {
+      if (!(await this.cancelAndRestock(tx, id, { status: from }))) throw conflict();
+      // Any non-status fields from the same patch.
+      const { status: _s, ...rest } = data; // eslint-disable-line @typescript-eslint/no-unused-vars
+      if (Object.keys(rest).length) await tx.order.update({ where: { id }, data: rest });
+    } else {
+      const res = await tx.order.updateMany({ where: { id, status: from }, data });
+      if (res.count !== 1) throw conflict();
+    }
+    return tx.order.findUnique({ where: { id }, include: this.include });
+  }
+
   async updateStatus(id: number, status: string) {
     if (!(ALLOWED_STATUSES as readonly string[]).includes(status)) {
       throw new BadRequestException('Invalid status');
@@ -309,18 +331,7 @@ export class OrdersService {
     if (from === to) return this.getOne(id);
     this.assertTransition(from, to);
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      if (to === 'CANCELLED') {
-        // Guarded flip + restock; if a concurrent cancel won, nothing is restocked again.
-        await this.cancelAndRestock(tx, id);
-        return tx.order.findUnique({ where: { id }, include: this.include });
-      }
-      return tx.order.update({
-        where: { id },
-        data: { status: to },
-        include: this.include,
-      });
-    });
+    const updated = await this.prisma.$transaction((tx) => this.transition(tx, id, from, to, { status: to }));
     if (to === 'SHIPPED') void this.mail.sendOrderShipped(updated).catch(() => undefined);
     return updated;
   }
@@ -346,7 +357,7 @@ export class OrdersService {
     if (!existing) throw new NotFoundException('Order not found');
 
     const data: Record<string, unknown> = {};
-    let restockOnCancel = false;
+    const fromStatus = existing.status as OrderStatus;
     if (patch.status !== undefined) {
       if (!(ALLOWED_STATUSES as readonly string[]).includes(patch.status)) {
         throw new BadRequestException('Invalid status');
@@ -358,7 +369,6 @@ export class OrdersService {
       if (from !== to) {
         this.assertTransition(from, to);
         data.status = to;
-        restockOnCancel = to === 'CANCELLED';
       }
     }
     if (patch.trackingNumber !== undefined) data.trackingNumber = patch.trackingNumber || null;
@@ -370,16 +380,9 @@ export class OrdersService {
     if (patch.customerPhone !== undefined) data.customerPhone = patch.customerPhone || null;
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      if (restockOnCancel) {
-        // If a concurrent cancel already flipped the order, do not touch status or stock again.
-        const cancelled = await this.cancelAndRestock(tx, id);
-        if (!cancelled) delete data.status;
-      }
-      return tx.order.update({
-        where: { id },
-        data,
-        include: this.include,
-      });
+      if (data.status !== undefined) return this.transition(tx, id, fromStatus, data.status as OrderStatus, data);
+      // No status change: plain field edits stay unguarded.
+      return tx.order.update({ where: { id }, data, include: this.include });
     });
     // data.status is only set when the status actually changed.
     if (data.status === 'SHIPPED') void this.mail.sendOrderShipped(updated).catch(() => undefined);

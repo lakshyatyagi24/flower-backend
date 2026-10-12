@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 
 function makeFakes(existingStatus = 'PAID') {
@@ -132,8 +133,13 @@ function makeCancelFakes(status = 'PAID', items: any[] = [{ productId: 1, quanti
     },
     order: {
       updateMany: jest.fn(async ({ where, data }: any) => {
-        const ok = where.status?.not ? state.status !== where.status.not : true;
-        if (ok) state.status = data.status;
+        const conds: any[] = where.AND ?? [where];
+        const ok = conds.every((c) => {
+          if (c.status === undefined) return true;
+          if (typeof c.status === 'string') return state.status === c.status;
+          return state.status !== c.status.not;
+        });
+        if (ok && data.status) state.status = data.status;
         return { count: ok ? 1 : 0 };
       }),
       update: jest.fn(async ({ data }: any) => ({ id: 5, ...data, status: data.status ?? state.status })),
@@ -153,7 +159,7 @@ describe('OrdersService.cancelAndRestock', () => {
     const { svc, tx, stock } = makeCancelFakes('PENDING');
     await expect(svc.cancelAndRestock(tx, 5)).resolves.toBe(true);
     expect(tx.order.updateMany).toHaveBeenCalledWith({
-      where: { id: 5, status: { not: 'CANCELLED' } },
+      where: { AND: [{ id: 5, status: { not: 'CANCELLED' } }, {}] },
       data: { status: 'CANCELLED' },
     });
     expect(stock).toEqual({ 1: 12, 2: 13 });
@@ -163,7 +169,7 @@ describe('OrdersService.cancelAndRestock', () => {
     const { svc, tx } = makeCancelFakes('PENDING');
     await svc.cancelAndRestock(tx, 5, { paymentStatus: 'UNPAID' });
     expect(tx.order.updateMany.mock.calls[0][0].where).toEqual({
-      id: 5, status: { not: 'CANCELLED' }, paymentStatus: 'UNPAID',
+      AND: [{ id: 5, status: { not: 'CANCELLED' } }, { paymentStatus: 'UNPAID' }],
     });
   });
 
@@ -199,10 +205,10 @@ describe('OrdersService cancel via updateStatus/adminUpdate', () => {
     expect(stock).toEqual({ 1: 12, 2: 13 });
   });
 
-  it('updateStatus loses a race to a concurrent cancel: restocks nothing, no error', async () => {
+  it('updateStatus loses a race to a concurrent cancel: Conflict, restocks nothing', async () => {
     const { svc, tx, stock } = makeCancelFakes('PAID');
     tx.order.updateMany.mockResolvedValue({ count: 0 });
-    await expect(svc.updateStatus(5, 'CANCELLED')).resolves.toBeDefined();
+    await expect(svc.updateStatus(5, 'CANCELLED')).rejects.toBeInstanceOf(ConflictException);
     expect(stock).toEqual({ 1: 10, 2: 10 });
   });
 
@@ -214,10 +220,51 @@ describe('OrdersService cancel via updateStatus/adminUpdate', () => {
     expect(stock).toEqual({ 1: 12, 2: 13 });
   });
 
-  it('adminUpdate loses a race to a concurrent cancel: restocks nothing', async () => {
+  it('adminUpdate loses a race to a concurrent cancel: Conflict, restocks nothing', async () => {
     const { svc, tx, stock } = makeCancelFakes('PAID');
     tx.order.updateMany.mockResolvedValue({ count: 0 });
-    await svc.adminUpdate(5, { status: 'CANCELLED' });
+    await expect(svc.adminUpdate(5, { status: 'CANCELLED' })).rejects.toBeInstanceOf(ConflictException);
     expect(stock).toEqual({ 1: 10, 2: 10 });
+  });
+});
+
+describe('OrdersService guarded status transitions (stale read)', () => {
+  /** Orders read says PENDING, but the DB row was already cancelled+restocked by the job. */
+  function staleRead() {
+    const f = makeCancelFakes('CANCELLED');
+    f.svc['prisma'].order.findUnique = jest.fn(async () => ({ id: 5, status: 'PENDING' }));
+    return f;
+  }
+
+  it.each(['SHIPPED', 'PAID'])('updateStatus PENDING->%s on a row cancelled meanwhile: Conflict, no mail, no restock, stays CANCELLED', async (to) => {
+    const { svc, tx, stock, state } = staleRead();
+    const mail = (svc as any).mail;
+    await expect(svc.updateStatus(5, to)).rejects.toBeInstanceOf(ConflictException);
+    expect(mail.sendOrderShipped).not.toHaveBeenCalled();
+    expect(tx.product.update).not.toHaveBeenCalled();
+    expect(state.status).toBe('CANCELLED');
+    expect(stock).toEqual({ 1: 10, 2: 10 });
+  });
+
+  it('adminUpdate PENDING->SHIPPED on a row cancelled meanwhile: Conflict, no mail, stays CANCELLED', async () => {
+    const { svc, state } = staleRead();
+    await expect(svc.adminUpdate(5, { status: 'SHIPPED', trackingNumber: 'T' })).rejects.toBeInstanceOf(ConflictException);
+    expect((svc as any).mail.sendOrderShipped).not.toHaveBeenCalled();
+    expect(state.status).toBe('CANCELLED');
+  });
+
+  it('cancel with a stale from (another admin completed it) is a Conflict and restocks nothing', async () => {
+    const f = makeCancelFakes('COMPLETED');
+    f.svc['prisma'].order.findUnique = jest.fn(async () => ({ id: 5, status: 'SHIPPED' }));
+    await expect(f.svc.updateStatus(5, 'CANCELLED')).rejects.toBeInstanceOf(ConflictException);
+    expect(f.state.status).toBe('COMPLETED');
+    expect(f.stock).toEqual({ 1: 10, 2: 10 });
+  });
+
+  it('adminUpdate without a status change stays unguarded and works', async () => {
+    const { svc, tx } = makeCancelFakes('CANCELLED');
+    await expect(svc.adminUpdate(5, { trackingNumber: 'X' })).resolves.toBeDefined();
+    expect(tx.order.updateMany).not.toHaveBeenCalled();
+    expect(tx.order.update).toHaveBeenCalled();
   });
 });

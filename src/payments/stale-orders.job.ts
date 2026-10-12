@@ -22,6 +22,8 @@ export class StaleOrdersJob {
 
   @Cron('*/5 * * * *')
   async tick(): Promise<void> {
+    // Never sweep from the cron inside tests: parallel e2e apps would race on each other's aged rows.
+    if (process.env.NODE_ENV === 'test') return;
     try {
       const n = await this.run();
       if (n > 0) this.log.log(`auto-cancelled ${n} stale unpaid orders`);
