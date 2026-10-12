@@ -76,11 +76,17 @@ export class OrdersController {
   @Get()
   async listAll(
     @Query('status') status?: string,
+    @Query('paymentStatus') paymentStatus?: string,
+    @Query('paymentMethod') paymentMethod?: string,
+    @Query('attention') attention?: string,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
   ) {
     return this.orders.listAll({
-      status,
+      status: typeof status === 'string' ? status : undefined,
+      paymentStatus: typeof paymentStatus === 'string' ? paymentStatus : undefined,
+      paymentMethod: typeof paymentMethod === 'string' ? paymentMethod : undefined,
+      attention: typeof attention === 'string' ? attention : undefined,
       take: take ? parseInt(take, 10) : undefined,
       skip: skip ? parseInt(skip, 10) : undefined,
     });

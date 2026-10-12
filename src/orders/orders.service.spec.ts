@@ -343,3 +343,187 @@ describe('OrdersService.switchToCod', () => {
     expect(mail.sendOrderPlaced).not.toHaveBeenCalled();
   });
 });
+
+describe('OrdersService.adminUpdate payment fields', () => {
+  function setup(over: any = {}) {
+    const row: any = { id: 5, status: 'PENDING', paymentStatus: 'PAID', refundNote: null, items: [], ...over };
+    const tx: any = {
+      order: {
+        updateMany: jest.fn(async ({ where, data }: any) => {
+          const conds: any[] = where.AND ?? [where];
+          const ok = conds.every((c) => (c.id === undefined || row.id === c.id) &&
+            (c.paymentStatus === undefined || row.paymentStatus === c.paymentStatus) &&
+            (c.status === undefined || typeof c.status !== 'string' ? c.status === undefined || row.status !== c.status.not : row.status === c.status));
+          if (ok) Object.assign(row, data);
+          return { count: ok ? 1 : 0 };
+        }),
+        update: jest.fn(async ({ data }: any) => Object.assign(row, data)),
+        findUnique: jest.fn(async () => ({ ...row })),
+      },
+      product: { update: jest.fn() },
+      orderItem: { findMany: jest.fn(async () => []) },
+    };
+    const prisma: any = {
+      order: { findUnique: jest.fn(async () => ({ ...row })) },
+      $transaction: jest.fn(async (fn: any) => fn(tx)),
+    };
+    const mail: any = { sendOrderShipped: jest.fn(async () => undefined), sendOrderPaid: jest.fn(), sendOrderPlaced: jest.fn() };
+    return { row, tx, mail, svc: new OrdersService(prisma, mail) };
+  }
+
+  it('PAID -> REFUNDED via guarded CAS; status untouched, no restock, no mail', async () => {
+    const { svc, row, tx, mail } = setup({ status: 'CANCELLED' });
+    await svc.adminUpdate(5, { paymentStatus: 'REFUNDED' });
+    expect(row).toMatchObject({ paymentStatus: 'REFUNDED', status: 'CANCELLED' });
+    expect(tx.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 5, paymentStatus: 'PAID' },
+      data: { paymentStatus: 'REFUNDED' },
+    });
+    expect(tx.product.update).not.toHaveBeenCalled();
+    expect(Object.values(mail).some((m: any) => m.mock.calls.length)).toBe(false);
+  });
+
+  it.each(['UNPAID', 'REFUNDED', 'FAILED'])('%s -> REFUNDED is a Conflict and writes nothing', async (ps) => {
+    const { svc, row } = setup({ paymentStatus: ps, refundNote: 'keep' });
+    await expect(svc.adminUpdate(5, { paymentStatus: 'REFUNDED', refundNote: 'new' })).rejects.toThrow('Only a paid order can be marked refunded');
+    await expect(svc.adminUpdate(5, { paymentStatus: 'REFUNDED' })).rejects.toBeInstanceOf(ConflictException);
+    expect(row).toMatchObject({ paymentStatus: ps, refundNote: 'keep' });
+  });
+
+  it('refundNote is trimmed; empty/whitespace/null clears; combines with the REFUNDED flip', async () => {
+    const a = setup();
+    await a.svc.adminUpdate(5, { refundNote: '  refunded via UPI  ' });
+    expect(a.row.refundNote).toBe('refunded via UPI');
+    expect(a.row.paymentStatus).toBe('PAID');
+    await a.svc.adminUpdate(5, { refundNote: '   ' });
+    expect(a.row.refundNote).toBeNull();
+    const b = setup({ refundNote: 'old' });
+    await b.svc.adminUpdate(5, { refundNote: null });
+    expect(b.row.refundNote).toBeNull();
+    const c = setup();
+    await c.svc.adminUpdate(5, { paymentStatus: 'REFUNDED', refundNote: ' done ' });
+    expect(c.row).toMatchObject({ paymentStatus: 'REFUNDED', refundNote: 'done' });
+  });
+
+  it('REFUNDED flip combined with a status change keeps the status transition rules', async () => {
+    const { svc, row } = setup({ status: 'PENDING' });
+    await svc.adminUpdate(5, { paymentStatus: 'REFUNDED', status: 'CANCELLED' });
+    expect(row).toMatchObject({ paymentStatus: 'REFUNDED', status: 'CANCELLED' });
+  });
+});
+
+describe('OrdersService.listAll / stats payment filters', () => {
+  function setup() {
+    const count = jest.fn(async (_a?: any) => 0);
+    const findMany = jest.fn(async (_a?: any) => []);
+    const prisma: any = {
+      order: { findMany, count, aggregate: jest.fn(async () => ({ _sum: { total: 0 } })) },
+      product: { count: jest.fn(async () => 0) },
+      user: { count: jest.fn(async () => 0) },
+      enquiry: { count: jest.fn(async () => 0) },
+    };
+    return { svc: new OrdersService(prisma, {} as any), findMany, count };
+  }
+  const whereOf = (findMany: jest.Mock) => findMany.mock.calls[0][0].where;
+
+  it('builds where for paymentStatus and paymentMethod; ignores invalid values', async () => {
+    const { svc, findMany } = setup();
+    await svc.listAll({ paymentStatus: 'REFUNDED', paymentMethod: 'COD' } as any);
+    expect(whereOf(findMany)).toEqual({ paymentStatus: 'REFUNDED', paymentMethod: 'COD' });
+    findMany.mockClear();
+    await svc.listAll({ paymentStatus: 'nope', paymentMethod: 'CASH', attention: 'bogus', status: 'x' } as any);
+    expect(whereOf(findMany)).toEqual({});
+  });
+
+  it.each([
+    ['refund', { paymentStatus: 'PAID', status: 'CANCELLED' }],
+    ['mismatch', { refundNote: { contains: 'AMOUNT MISMATCH' } }],
+    ['awaiting', { paymentMethod: 'RAZORPAY', paymentStatus: { in: ['UNPAID', 'FAILED'] }, status: 'PENDING' }],
+  ])('attention=%s builds the expected condition (ANDed with other filters) and count uses the same where', async (a, cond) => {
+    const { svc, findMany, count } = setup();
+    await svc.listAll({ attention: a, status: 'PENDING' } as any);
+    expect(whereOf(findMany)).toEqual({ status: 'PENDING', AND: [cond] });
+    expect(count.mock.calls[0][0].where).toEqual(whereOf(findMany));
+  });
+
+  it('keeps take/skip clamping', async () => {
+    const { svc } = setup();
+    await expect(svc.listAll({ take: 9999, skip: -5 } as any)).resolves.toMatchObject({ take: 200, skip: 0 });
+  });
+
+  it('stats exposes unpaidOnline, refundsDue and mismatches using the right criteria', async () => {
+    const { svc, count } = setup();
+    const key = (w: any) => JSON.stringify(w);
+    const answers = new Map<string, number>([
+      [key({ paymentMethod: 'RAZORPAY', status: 'PENDING', paymentStatus: { in: ['UNPAID', 'FAILED'] } }), 3],
+      [key({ paymentStatus: 'PAID', status: 'CANCELLED' }), 4],
+      [key({ refundNote: { contains: 'AMOUNT MISMATCH' }, paymentStatus: { not: 'REFUNDED' } }), 5],
+    ]);
+    count.mockImplementation(async (a: any) => (a?.where ? answers.get(key(a.where)) ?? 0 : 0));
+    const res: any = await svc.stats();
+    expect(res).toMatchObject({ unpaidOnline: 3, refundsDue: 4, mismatches: 5 });
+    for (const k of ['orderCount', 'productCount', 'customerCount', 'revenue', 'recentOrders', 'openEnquiries']) {
+      expect(res).toHaveProperty(k);
+    }
+  });
+});
+
+describe('OrdersService.switchToCod abandoned-order marker', () => {
+  function setup(order: any) {
+    const matches = (where: any) =>
+      Object.entries(where).every(([k, v]: [string, any]) =>
+        v && typeof v === 'object' && 'in' in v ? v.in.includes(order[k]) : (order[k] ?? null) === v,
+      );
+    const prisma: any = {
+      order: {
+        findUnique: jest.fn(async () => ({ ...order })),
+        updateMany: jest.fn(async ({ where, data }: any) => {
+          const ok = matches(where);
+          if (ok) Object.assign(order, data);
+          return { count: ok ? 1 : 0 };
+        }),
+      },
+    };
+    return { svc: new OrdersService(prisma, { sendOrderPlaced: jest.fn(async () => undefined) } as any), prisma };
+  }
+  const base = (over: any = {}) => ({
+    id: 5, userId: null, status: 'PENDING', paymentStatus: 'UNPAID', paymentMethod: 'RAZORPAY',
+    razorpayOrderId: 'order_old', razorpayPaymentId: null, customerEmail: 'c@x.com', refundNote: null, items: [], ...over,
+  });
+
+  it('writes the marker with the abandoned razorpay order id', async () => {
+    const order = base();
+    await setup(order).svc.switchToCod(5, null, 'c@x.com');
+    expect(order.refundNote).toBe('Switched to COD; abandoned Razorpay order order_old');
+    expect(order.razorpayOrderId).toBeNull();
+  });
+
+  it('appends to (never clobbers) an existing refundNote with a newline', async () => {
+    const order = base({ refundNote: 'owner note' });
+    await setup(order).svc.switchToCod(5, null, 'c@x.com');
+    expect(order.refundNote).toBe('owner note\nSwitched to COD; abandoned Razorpay order order_old');
+  });
+
+  it('the CAS is bound to the id and note it read; a concurrent change retries with fresh values', async () => {
+    const order: any = base();
+    const { svc, prisma } = setup(order);
+    const real = prisma.order.updateMany.getMockImplementation()!;
+    let first = true;
+    prisma.order.updateMany.mockImplementation(async (args: any) => {
+      if (first) { first = false; order.razorpayOrderId = 'order_new'; } // createRazorpayOrder raced in
+      return real(args);
+    });
+    await svc.switchToCod(5, null, 'c@x.com');
+    expect(order.refundNote).toBe('Switched to COD; abandoned Razorpay order order_new');
+    expect(prisma.order.updateMany.mock.calls[0][0].where).toMatchObject({ razorpayOrderId: 'order_old', refundNote: null });
+  });
+
+  it('second call does not append again', async () => {
+    const order = base();
+    const { svc } = setup(order);
+    await svc.switchToCod(5, null, 'c@x.com');
+    const note = order.refundNote;
+    await svc.switchToCod(5, null, 'c@x.com');
+    expect(order.refundNote).toBe(note);
+  });
+});

@@ -40,6 +40,17 @@ const STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   CANCELLED: [],
 };
 
+const PAYMENT_STATUSES = ['UNPAID', 'PAID', 'FAILED', 'REFUNDED'] as const;
+const PAYMENT_METHODS = ['COD', 'RAZORPAY'] as const;
+const MISMATCH_MARKER = 'AMOUNT MISMATCH';
+
+// Orders needing the owner's attention (admin filter). Shared shapes with stats().
+const ATTENTION_WHERE: Record<string, Record<string, unknown>> = {
+  refund: { paymentStatus: 'PAID', status: 'CANCELLED' },
+  mismatch: { refundNote: { contains: MISMATCH_MARKER } },
+  awaiting: { paymentMethod: 'RAZORPAY', paymentStatus: { in: ['UNPAID', 'FAILED'] }, status: 'PENDING' },
+};
+
 @Injectable()
 export class OrdersService {
   constructor(
@@ -221,16 +232,36 @@ export class OrdersService {
       : false;
     if (!order || !owns) throw new ForbiddenException('Not your order');
 
-    const switched = await this.prisma.order.updateMany({
-      where: {
-        id: orderId,
-        paymentMethod: 'RAZORPAY',
-        status: 'PENDING',
-        paymentStatus: { in: ['UNPAID', 'FAILED'] },
-        razorpayPaymentId: null,
-      },
-      data: { paymentMethod: 'COD', razorpayOrderId: null, paymentStatus: 'UNPAID' },
-    });
+    // The CAS is bound to the razorpayOrderId and refundNote values we READ, so the marker we append
+    // names exactly the Razorpay order being abandoned. If createRazorpayOrder (or a webhook trace)
+    // changed either meanwhile, the CAS matches nothing; we re-read and retry (bounded), and if the
+    // order is no longer switchable the usual 409 logic below applies.
+    const switchable = (o: any) =>
+      !!o && o.paymentMethod === 'RAZORPAY' && o.status === 'PENDING' &&
+      (o.paymentStatus === 'UNPAID' || o.paymentStatus === 'FAILED') && !o.razorpayPaymentId;
+    let switched = { count: 0 };
+    let current: any = order;
+    for (let attempt = 0; attempt < 3 && switchable(current); attempt++) {
+      const abandoned: string | null = current.razorpayOrderId ?? null;
+      const existingNote: string | null = current.refundNote ?? null;
+      const marker = abandoned ? `Switched to COD; abandoned Razorpay order ${abandoned}` : null;
+      const data: Record<string, unknown> = { paymentMethod: 'COD', razorpayOrderId: null, paymentStatus: 'UNPAID' };
+      if (marker) data.refundNote = existingNote ? `${existingNote}\n${marker}` : marker;
+      switched = await this.prisma.order.updateMany({
+        where: {
+          id: orderId,
+          paymentMethod: 'RAZORPAY',
+          status: 'PENDING',
+          paymentStatus: { in: ['UNPAID', 'FAILED'] },
+          razorpayPaymentId: null,
+          razorpayOrderId: abandoned,
+          refundNote: existingNote,
+        },
+        data,
+      });
+      if (switched.count === 1) break;
+      current = await this.prisma.order.findUnique({ where: { id: orderId } });
+    }
 
     const fresh = await this.prisma.order.findUnique({ where: { id: orderId }, include: this.include });
     if (switched.count === 1) {
@@ -274,10 +305,19 @@ export class OrdersService {
     return publicOrder;
   }
 
-  async listAll(params: { status?: string; take?: number; skip?: number }) {
+  async listAll(params: { status?: string; paymentStatus?: string; paymentMethod?: string; attention?: string; take?: number; skip?: number }) {
     const where: Record<string, unknown> = {};
     if (params.status && (ALLOWED_STATUSES as readonly string[]).includes(params.status)) {
       where.status = params.status;
+    }
+    if (params.paymentStatus && (PAYMENT_STATUSES as readonly string[]).includes(params.paymentStatus)) {
+      where.paymentStatus = params.paymentStatus;
+    }
+    if (params.paymentMethod && (PAYMENT_METHODS as readonly string[]).includes(params.paymentMethod)) {
+      where.paymentMethod = params.paymentMethod;
+    }
+    if (params.attention && Object.prototype.hasOwnProperty.call(ATTENTION_WHERE, params.attention)) {
+      where.AND = [ATTENTION_WHERE[params.attention]];
     }
     const take = Math.min(Math.max(params.take ?? 50, 1), 200);
     const skip = Math.max(params.skip ?? 0, 0);
@@ -391,6 +431,8 @@ export class OrdersService {
       city?: string | null;
       postalCode?: string | null;
       customerPhone?: string | null;
+      paymentStatus?: 'REFUNDED';
+      refundNote?: string | null;
     },
   ) {
     const existing = await this.prisma.order.findUnique({ where: { id } });
@@ -418,8 +460,21 @@ export class OrdersService {
     if (patch.city !== undefined) data.city = patch.city || null;
     if (patch.postalCode !== undefined) data.postalCode = patch.postalCode || null;
     if (patch.customerPhone !== undefined) data.customerPhone = patch.customerPhone || null;
+    if (patch.refundNote !== undefined) data.refundNote = patch.refundNote?.trim() || null;
+    if (patch.paymentStatus !== undefined && patch.paymentStatus !== 'REFUNDED') {
+      throw new BadRequestException('Invalid payment status');
+    }
+    const markRefunded = patch.paymentStatus === 'REFUNDED';
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      if (markRefunded) {
+        // Compare-and-set: only a PAID order can be marked refunded. Never touches status/stock/mail.
+        const flipped = await tx.order.updateMany({
+          where: { id, paymentStatus: 'PAID' },
+          data: { paymentStatus: 'REFUNDED' },
+        });
+        if (flipped.count !== 1) throw new ConflictException('Only a paid order can be marked refunded');
+      }
       if (data.status !== undefined) return this.transition(tx, id, fromStatus, data.status as OrderStatus, data);
       // No status change: plain field edits stay unguarded.
       return tx.order.update({ where: { id }, data, include: this.include });
@@ -430,7 +485,7 @@ export class OrdersService {
   }
 
   async stats() {
-    const [orderCount, productCount, customerCount, totalAgg, recentOrders, openEnquiries] = await Promise.all([
+    const [orderCount, productCount, customerCount, totalAgg, recentOrders, openEnquiries, unpaidOnline, refundsDue, mismatches] = await Promise.all([
       this.prisma.order.count(),
       this.prisma.product.count(),
       this.prisma.user.count({ where: { role: 'CUSTOMER' } }),
@@ -447,6 +502,10 @@ export class OrdersService {
         },
       }),
       this.prisma.enquiry.count({ where: { status: { in: ['NEW', 'CONTACTED', 'QUOTED'] } } }),
+      this.prisma.order.count({ where: { paymentMethod: 'RAZORPAY', status: 'PENDING', paymentStatus: { in: ['UNPAID', 'FAILED'] } } }),
+      // REFUNDED is excluded by construction (paymentStatus must still be PAID).
+      this.prisma.order.count({ where: { paymentStatus: 'PAID', status: 'CANCELLED' } }),
+      this.prisma.order.count({ where: { refundNote: { contains: MISMATCH_MARKER }, paymentStatus: { not: 'REFUNDED' } } }),
     ]);
     return {
       orderCount,
@@ -455,6 +514,9 @@ export class OrdersService {
       revenue: totalAgg._sum.total ?? 0,
       recentOrders,
       openEnquiries,
+      unpaidOnline,
+      refundsDue,
+      mismatches,
     };
   }
 }

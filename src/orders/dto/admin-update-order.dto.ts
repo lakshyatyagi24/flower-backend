@@ -10,4 +10,7 @@ export class AdminUpdateOrderDto {
   @IsOptional() @IsString() @MaxLength(80) city?: string | null;
   @IsOptional() @IsString() @MaxLength(6) postalCode?: string | null;
   @IsOptional() @IsString() @MaxLength(15) customerPhone?: string | null;
+  // Only a PAID order can be marked refunded (compare-and-set in the service).
+  @IsOptional() @IsIn(['REFUNDED']) paymentStatus?: 'REFUNDED';
+  @IsOptional() @IsString() @MaxLength(1000) refundNote?: string | null;
 }
