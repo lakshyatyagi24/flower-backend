@@ -248,7 +248,8 @@ export class ProductsService {
     if (saleMode === 'PURCHASE') {
       if (typeof input.price !== 'number' || input.price < 0) throw new BadRequestException('Valid price is required for purchase products');
     }
-    const slug = (input.slug?.trim() || slugify(input.name)).toLowerCase();
+    // Always slugify (same as update): an explicit slug with &, <, spaces or capitals must not reach URLs/sitemaps.
+    const slug = slugify(input.slug ?? '') || slugify(input.name);
     if (!slug) throw new BadRequestException('Slug could not be derived');
     const productType: ProductTypeValue = input.productType && VALID_PRODUCT_TYPES.includes(input.productType) ? input.productType : 'CUT_FLOWER';
     try {

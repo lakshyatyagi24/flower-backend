@@ -134,4 +134,15 @@ describe('Product tags, sort and pagination (e2e)', () => {
       .expect(400);
     expect(await prisma.product.count({ where: { slug: { in: [`pt-bad-${run}`, `pt-many-${run}`] } } })).toBe(0);
   });
+
+  it('admin create slugifies an unsafe slug', async () => {
+    const created = await http()
+      .post('/products')
+      .set('Authorization', adminAuth())
+      .send({ name: 'PT Slug', slug: `PT Slug & Co <${run}>!`, price: 5 })
+      .expect(201);
+    ids.push(created.body.id);
+    expect(created.body.slug).toBe(`pt-slug-co-${run}`);
+    await http().get(`/products/slug/pt-slug-co-${run}`).expect(200);
+  });
 });

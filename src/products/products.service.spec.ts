@@ -110,6 +110,28 @@ describe('ProductsService.list query building', () => {
   });
 });
 
+describe('ProductsService slug on create', () => {
+  it('slugifies an explicit slug (no & < spaces or uppercase can reach URLs or the sitemap)', async () => {
+    const { svc, create } = makeService();
+    await svc.create({ name: 'Rose', price: 10, slug: ' Rose & Lily <3>! ' });
+    expect(create.mock.calls[0][0].data.slug).toBe('rose-lily-3');
+  });
+  it('derives the slug from the name when none is given', async () => {
+    const { svc, create } = makeService();
+    await svc.create({ name: 'Red Rose Bouquet', price: 10 });
+    expect(create.mock.calls[0][0].data.slug).toBe('red-rose-bouquet');
+  });
+  it('falls back to the name when the given slug has no usable characters', async () => {
+    const { svc, create } = makeService();
+    await svc.create({ name: 'Red Rose', price: 10, slug: '!!!' });
+    expect(create.mock.calls[0][0].data.slug).toBe('red-rose');
+  });
+  it('rejects when no slug can be derived at all', async () => {
+    const { svc } = makeService();
+    await expect(svc.create({ name: '***', price: 10 })).rejects.toThrow(BadRequestException);
+  });
+});
+
 describe('ProductsService tags on write', () => {
   it('create normalises tags', async () => {
     const { svc, create } = makeService();
