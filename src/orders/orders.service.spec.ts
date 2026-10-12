@@ -11,6 +11,8 @@ function makeFakes(existingStatus = 'PAID') {
     order: {
       create: jest.fn(async () => ({ ...order, status: 'PENDING' })),
       update: jest.fn(async ({ data }: any) => ({ ...order, ...data })),
+      updateMany: jest.fn(async () => ({ count: 1 })),
+      findUnique: jest.fn(async () => ({ ...order, status: 'CANCELLED' })),
     },
   };
   const prisma: any = {
@@ -113,5 +115,109 @@ describe('OrdersService mail hooks', () => {
     const b = makeFakes('SHIPPED');
     await b.svc.adminUpdate(5, { status: 'SHIPPED', trackingNumber: 'T2' });
     expect(b.mail.sendOrderShipped).not.toHaveBeenCalled();
+  });
+});
+
+/** Stateful fake: status flips only through the guarded updateMany, stock only via increment. */
+function makeCancelFakes(status = 'PAID', items: any[] = [{ productId: 1, quantity: 2 }, { productId: 2, quantity: 3 }]) {
+  const state = { status };
+  const stock: Record<number, number> = { 1: 10, 2: 10 };
+  const tx: any = {
+    orderItem: { findMany: jest.fn(async () => items) },
+    product: {
+      update: jest.fn(async ({ where, data }: any) => {
+        stock[where.id] += data.stock.increment;
+        return {};
+      }),
+    },
+    order: {
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const ok = where.status?.not ? state.status !== where.status.not : true;
+        if (ok) state.status = data.status;
+        return { count: ok ? 1 : 0 };
+      }),
+      update: jest.fn(async ({ data }: any) => ({ id: 5, ...data, status: data.status ?? state.status })),
+      findUnique: jest.fn(async () => ({ id: 5, status: state.status })),
+    },
+  };
+  const prisma: any = {
+    order: { findUnique: jest.fn(async () => ({ id: 5, status: state.status })) },
+    $transaction: jest.fn(async (fn: any) => fn(tx)),
+  };
+  const mail: any = { sendOrderShipped: jest.fn(async () => undefined) };
+  return { svc: new OrdersService(prisma, mail), tx, stock, state };
+}
+
+describe('OrdersService.cancelAndRestock', () => {
+  it('guards the status write, restocks all items once when count===1, returns true', async () => {
+    const { svc, tx, stock } = makeCancelFakes('PENDING');
+    await expect(svc.cancelAndRestock(tx, 5)).resolves.toBe(true);
+    expect(tx.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 5, status: { not: 'CANCELLED' } },
+      data: { status: 'CANCELLED' },
+    });
+    expect(stock).toEqual({ 1: 12, 2: 13 });
+  });
+
+  it('merges extraWhere into the guarded write', async () => {
+    const { svc, tx } = makeCancelFakes('PENDING');
+    await svc.cancelAndRestock(tx, 5, { paymentStatus: 'UNPAID' });
+    expect(tx.order.updateMany.mock.calls[0][0].where).toEqual({
+      id: 5, status: { not: 'CANCELLED' }, paymentStatus: 'UNPAID',
+    });
+  });
+
+  it('restocks nothing and returns false when already cancelled', async () => {
+    const { svc, tx, stock } = makeCancelFakes('CANCELLED');
+    await expect(svc.cancelAndRestock(tx, 5)).resolves.toBe(false);
+    expect(tx.orderItem.findMany).not.toHaveBeenCalled();
+    expect(stock).toEqual({ 1: 10, 2: 10 });
+  });
+
+  it('restocks nothing when the guarded write matches no row (extraWhere no longer true)', async () => {
+    const { svc, tx, stock } = makeCancelFakes('PAID');
+    tx.order.updateMany.mockResolvedValue({ count: 0 });
+    await expect(svc.cancelAndRestock(tx, 5, { status: 'PENDING' })).resolves.toBe(false);
+    expect(tx.product.update).not.toHaveBeenCalled();
+    expect(stock).toEqual({ 1: 10, 2: 10 });
+  });
+
+  it('skips items without a productId', async () => {
+    const { svc, tx, stock } = makeCancelFakes('PENDING', [{ productId: null, quantity: 4 }, { productId: 1, quantity: 1 }]);
+    await svc.cancelAndRestock(tx, 5);
+    expect(tx.product.update).toHaveBeenCalledTimes(1);
+    expect(stock).toEqual({ 1: 11, 2: 10 });
+  });
+});
+
+describe('OrdersService cancel via updateStatus/adminUpdate', () => {
+  it('updateStatus to CANCELLED restocks exactly once; a repeat does not restock again', async () => {
+    const { svc, stock } = makeCancelFakes('PAID');
+    await svc.updateStatus(5, 'CANCELLED');
+    expect(stock).toEqual({ 1: 12, 2: 13 });
+    await svc.updateStatus(5, 'CANCELLED');
+    expect(stock).toEqual({ 1: 12, 2: 13 });
+  });
+
+  it('updateStatus loses a race to a concurrent cancel: restocks nothing, no error', async () => {
+    const { svc, tx, stock } = makeCancelFakes('PAID');
+    tx.order.updateMany.mockResolvedValue({ count: 0 });
+    await expect(svc.updateStatus(5, 'CANCELLED')).resolves.toBeDefined();
+    expect(stock).toEqual({ 1: 10, 2: 10 });
+  });
+
+  it('adminUpdate cancel restocks once; admin cancel of an already-CANCELLED order is a validation no-op', async () => {
+    const { svc, stock } = makeCancelFakes('PAID');
+    await svc.adminUpdate(5, { status: 'CANCELLED', adminNotes: 'x' });
+    expect(stock).toEqual({ 1: 12, 2: 13 });
+    await svc.adminUpdate(5, { status: 'CANCELLED' });
+    expect(stock).toEqual({ 1: 12, 2: 13 });
+  });
+
+  it('adminUpdate loses a race to a concurrent cancel: restocks nothing', async () => {
+    const { svc, tx, stock } = makeCancelFakes('PAID');
+    tx.order.updateMany.mockResolvedValue({ count: 0 });
+    await svc.adminUpdate(5, { status: 'CANCELLED' });
+    expect(stock).toEqual({ 1: 10, 2: 10 });
   });
 });

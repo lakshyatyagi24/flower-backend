@@ -266,6 +266,38 @@ export class OrdersService {
     }
   }
 
+  /**
+   * Flip an order to CANCELLED and give its reserved stock back, atomically with the caller's
+   * transaction. The status write is guarded (`status != CANCELLED` plus any `extraWhere`), and
+   * stock is restored ONLY if this call performed the flip, so concurrent/repeated cancels can
+   * never restock twice and a changed precondition (e.g. just paid) cancels nothing.
+   * Returns true iff this call cancelled the order.
+   */
+  async cancelAndRestock(
+    tx: any,
+    orderId: number,
+    extraWhere: Record<string, unknown> = {},
+  ): Promise<boolean> {
+    const flipped = await tx.order.updateMany({
+      where: { id: orderId, status: { not: 'CANCELLED' }, ...extraWhere },
+      data: { status: 'CANCELLED' },
+    });
+    if (flipped.count !== 1) return false;
+    const items = await tx.orderItem.findMany({
+      where: { orderId },
+      select: { productId: true, quantity: true },
+    });
+    for (const it of items) {
+      if (it.productId) {
+        await tx.product.update({
+          where: { id: it.productId },
+          data: { stock: { increment: it.quantity } },
+        });
+      }
+    }
+    return true;
+  }
+
   async updateStatus(id: number, status: string) {
     if (!(ALLOWED_STATUSES as readonly string[]).includes(status)) {
       throw new BadRequestException('Invalid status');
@@ -279,19 +311,9 @@ export class OrdersService {
 
     const updated = await this.prisma.$transaction(async (tx) => {
       if (to === 'CANCELLED') {
-        // Restore reserved stock exactly once on cancellation.
-        const items = await tx.orderItem.findMany({
-          where: { orderId: id },
-          select: { productId: true, quantity: true },
-        });
-        for (const it of items) {
-          if (it.productId) {
-            await tx.product.update({
-              where: { id: it.productId },
-              data: { stock: { increment: it.quantity } },
-            });
-          }
-        }
+        // Guarded flip + restock; if a concurrent cancel won, nothing is restocked again.
+        await this.cancelAndRestock(tx, id);
+        return tx.order.findUnique({ where: { id }, include: this.include });
       }
       return tx.order.update({
         where: { id },
@@ -349,18 +371,9 @@ export class OrdersService {
 
     const updated = await this.prisma.$transaction(async (tx) => {
       if (restockOnCancel) {
-        const items = await tx.orderItem.findMany({
-          where: { orderId: id },
-          select: { productId: true, quantity: true },
-        });
-        for (const it of items) {
-          if (it.productId) {
-            await tx.product.update({
-              where: { id: it.productId },
-              data: { stock: { increment: it.quantity } },
-            });
-          }
-        }
+        // If a concurrent cancel already flipped the order, do not touch status or stock again.
+        const cancelled = await this.cancelAndRestock(tx, id);
+        if (!cancelled) delete data.status;
       }
       return tx.order.update({
         where: { id },
