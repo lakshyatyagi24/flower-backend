@@ -669,3 +669,48 @@ describe('OrdersService.switchToCod abandoned-order marker', () => {
     expect(order.refundNote).toBe(note);
   });
 });
+
+describe('OrdersService shipping settings fallback', () => {
+  const key = process.env.RAZORPAY_KEY_ID;
+  const run = async (rows: Record<string, string>, qty: number) => {
+    const { svc, prisma } = makeFakes();
+    prisma.product.findMany.mockResolvedValue([
+      { id: 1, name: 'Rose', price: 100, stock: 1000, active: true, saleMode: 'PURCHASE', gstRate: 0, minOrderQty: 1 },
+    ]);
+    prisma.setting.findUnique.mockImplementation(async ({ where }: any) =>
+      where.key in rows ? { key: where.key, value: rows[where.key] } : null,
+    );
+    let created: any;
+    const origTx = prisma.$transaction.getMockImplementation()!;
+    prisma.$transaction.mockImplementation(async (fn: any) =>
+      origTx(async (tx: any) => {
+        const create = tx.order.create;
+        tx.order.create = jest.fn(async (args: any) => {
+          created = args.data;
+          return create(args);
+        });
+        return fn(tx);
+      }),
+    );
+    await svc.create(null, { ...input, items: [{ productId: 1, quantity: qty }] });
+    return created;
+  };
+  afterAll(() => {
+    if (key === undefined) delete process.env.RAZORPAY_KEY_ID;
+  });
+
+  it('missing rows use the public defaults: flat 99, free from 1499', async () => {
+    expect((await run({}, 1)).shipping).toBe(99);
+    expect((await run({}, 14)).shipping).toBe(99); // 1400 < 1499
+    expect((await run({}, 15)).shipping).toBe(0); // 1500 >= 1499
+  });
+
+  it('present rows override the defaults', async () => {
+    expect((await run({ 'shipping.flatRate': '50', 'shipping.freeThreshold': '200' }, 1)).shipping).toBe(50);
+    expect((await run({ 'shipping.flatRate': '50', 'shipping.freeThreshold': '200' }, 2)).shipping).toBe(0);
+  });
+
+  it('a blank threshold row disables free shipping', async () => {
+    expect((await run({ 'shipping.freeThreshold': '' }, 50)).shipping).toBe(99);
+  });
+});

@@ -10,6 +10,7 @@ import { normalizeIndianPhone } from '../common/validators';
 import { MailService } from '../mail/mail.service';
 import { isOnlinePaymentsEnabled } from '../payments/config';
 import { joinRefundNote, splitRefundNote } from './refund-note';
+import { SETTING_DEFAULTS } from '../settings/setting-defaults';
 
 interface OrderItemInput {
   productId: number;
@@ -87,15 +88,17 @@ export class OrdersService {
 
   private async loadShippingRate(): Promise<number> {
     const setting = await this.prisma.setting.findUnique({ where: { key: 'shipping.flatRate' } });
-    if (!setting) return 0;
-    const v = parseFloat(setting.value);
+    // A missing row uses the same default the public /settings exposes; a present-but-invalid value means 0.
+    const raw = setting ? setting.value : SETTING_DEFAULTS['shipping.flatRate'];
+    const v = parseFloat(raw);
     return isNaN(v) ? 0 : v;
   }
 
   private async loadFreeShippingThreshold(): Promise<number | null> {
     const setting = await this.prisma.setting.findUnique({ where: { key: 'shipping.freeThreshold' } });
-    if (!setting) return null;
-    const v = parseFloat(setting.value);
+    // Missing row: same default as /settings. A blank/invalid value means "no free shipping".
+    const raw = setting ? setting.value : SETTING_DEFAULTS['shipping.freeThreshold'];
+    const v = parseFloat(raw);
     return isNaN(v) ? null : v;
   }
 

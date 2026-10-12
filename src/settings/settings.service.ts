@@ -1,17 +1,8 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { SETTING_DEFAULTS } from './setting-defaults';
 
-const DEFAULTS: Record<string, string> = {
-  'store.name': 'Fresh Petals India',
-  'store.email': 'orders@example.com',
-  'store.phone': '+91 93540 16059',
-  'store.whatsapp': '+91 93540 16059',
-  'store.address': 'Delhi NCR — please update',
-  'store.instagram': '',
-  'store.gstin': '',
-  'shipping.flatRate': '99',
-  'shipping.freeThreshold': '1499',
-};
+const DEFAULTS = SETTING_DEFAULTS;
 
 @Injectable()
 export class SettingsService {
