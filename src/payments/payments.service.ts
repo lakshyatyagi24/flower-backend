@@ -134,7 +134,14 @@ export class PaymentsService {
       });
       return true;
     });
-    if (!won) return 'ALREADY_PAID';
+    if (!won) {
+      // A capture landing on a non-online order (e.g. COD after an abandoned online attempt) needs eyes.
+      const current = await this.prisma.order.findUnique({ where: { id: orderId } });
+      if (current && current.paymentMethod !== 'RAZORPAY') {
+        this.log.warn(`order ${orderId} is ${String(current.paymentMethod)} but payment ${razorpayPaymentId} was captured; refund manually`);
+      }
+      return 'ALREADY_PAID';
+    }
 
     // Read + mail only after the commit.
 
@@ -184,6 +191,9 @@ export class PaymentsService {
     const order = await this.prisma.order.findUnique({ where: { razorpayOrderId: rzpOrderId } });
     if (!order) {
       this.log.warn(`webhook ${event} for unknown razorpay order ${rzpOrderId.slice(0, 64)}`);
+      if (event === 'payment.captured' || event === 'order.paid') {
+        await this.traceCaptureAfterCodSwitch(rzpOrderId, payment.id);
+      }
       return { ok: true };
     }
 
@@ -228,6 +238,37 @@ export class PaymentsService {
     const result = await this.markPaid(order.id, paymentId);
     this.log.log(`webhook ${event} order=${order.id} result=${result}`);
     return { ok: true };
+  }
+
+  /**
+   * A payment captured on a Razorpay order that was abandoned by switching to COD (the id was nulled,
+   * so lookup by razorpayOrderId finds nothing). Find the order by the marker switchToCod left in its
+   * refundNote and append a refund trace exactly once. Changes nothing but refundNote; never throws.
+   */
+  private async traceCaptureAfterCodSwitch(rzpOrderId: string, paymentId: unknown): Promise<void> {
+    if (typeof paymentId !== 'string' || !paymentId) return;
+    try {
+      const trace = `PAYMENT ${paymentId} CAPTURED AFTER SWITCH TO COD - REFUND`;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const found = await this.prisma.order.findFirst({
+          where: { refundNote: { contains: `abandoned Razorpay order ${rzpOrderId}` } },
+        });
+        if (!found) return;
+        const note: string = found.refundNote ?? '';
+        if (note.includes(`PAYMENT ${paymentId} `)) return; // idempotent: already traced
+        // CAS on the note we read so two concurrent deliveries cannot both append (or clobber).
+        const res = await this.prisma.order.updateMany({
+          where: { id: found.id, refundNote: found.refundNote },
+          data: { refundNote: `${note}\n${trace}` },
+        });
+        if (res.count === 1) {
+          this.log.warn(`order ${found.id}: payment ${paymentId} captured after switch to COD; refund manually`);
+          return;
+        }
+      }
+    } catch (err) {
+      this.log.warn(`could not trace post-switch capture: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
   }
 
   async verify(input: { orderId: number; razorpayOrderId: string; razorpayPaymentId: string; signature: string }) {

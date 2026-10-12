@@ -17,6 +17,10 @@ function fakePrisma(order: any) {
       const hit = where.razorpayOrderId !== undefined ? order?.razorpayOrderId === where.razorpayOrderId : order?.id === where.id;
       return hit ? { ...order } : null;
     }),
+    findFirst: jest.fn(async ({ where }: any) => {
+      const c = where?.refundNote?.contains;
+      return c && typeof order?.refundNote === 'string' && order.refundNote.includes(c) ? { ...order } : null;
+    }),
     update: jest.fn(async ({ data }: any) => Object.assign(order, data)),
     updateMany: jest.fn(async ({ where, data }: any) => {
       const ok = order.id === where.id && matches(where);
@@ -490,6 +494,70 @@ describe('PaymentsService', () => {
       expect(all).not.toContain(sig);
       expect(all).not.toContain(WH);
       expect(all).not.toContain('leak@x.com');
+    });
+  });
+
+  describe('payments captured after a switch to COD', () => {
+    const WH = 'whsec_unit2';
+    const savedWh = process.env.RAZORPAY_WEBHOOK_SECRET;
+    beforeEach(() => { process.env.RAZORPAY_WEBHOOK_SECRET = WH; });
+    afterEach(() => {
+      if (savedWh === undefined) delete process.env.RAZORPAY_WEBHOOK_SECRET; else process.env.RAZORPAY_WEBHOOK_SECRET = savedWh;
+    });
+    const raw = (event: string, over: any = {}) =>
+      Buffer.from(JSON.stringify({ event, payload: { payment: { entity: { id: 'pay_late', order_id: 'order_old', amount: 124950, ...over } } } }));
+    const sig = (b: Buffer) => createHmac('sha256', WH).update(b).digest('hex');
+    const codOrder = (note: string | null = 'Switched to COD; abandoned Razorpay order order_old') =>
+      baseOrder({ paymentMethod: 'COD', razorpayOrderId: null, refundNote: note });
+    const TRACE = 'PAYMENT pay_late CAPTURED AFTER SWITCH TO COD - REFUND';
+
+    it('appends the trace once (idempotent), changes nothing else, returns ok, warns with ids only', async () => {
+      const order = codOrder();
+      const svc = make(order);
+      const b = raw('payment.captured');
+      await expect(svc.handleWebhook(b, sig(b))).resolves.toEqual({ ok: true });
+      await expect(svc.handleWebhook(b, sig(b))).resolves.toEqual({ ok: true });
+      expect(order.refundNote).toBe(`Switched to COD; abandoned Razorpay order order_old\n${TRACE}`);
+      expect(order).toMatchObject({ status: 'PENDING', paymentStatus: 'UNPAID', paymentMethod: 'COD', razorpayPaymentId: null });
+      const msgs = warnSpy.mock.calls.map((c) => String(c[0]));
+      const traced = msgs.filter((m) => m.includes('pay_late') && m.includes('7'));
+      expect(traced).toHaveLength(1);
+      expect(msgs.join(' | ')).not.toContain(WH);
+    });
+
+    it('order.paid with a payment entity is traced too', async () => {
+      const order = codOrder();
+      const b = raw('order.paid');
+      await make(order).handleWebhook(b, sig(b));
+      expect(order.refundNote).toContain(TRACE);
+    });
+
+    it.each(['payment.failed'])('no trace for %s', async (ev) => {
+      const order = codOrder();
+      const b = raw(ev);
+      await expect(make(order).handleWebhook(b, sig(b))).resolves.toEqual({ ok: true });
+      expect(order.refundNote).not.toContain('PAYMENT');
+    });
+
+    it('no trace when no order carries the abandoned marker for that id', async () => {
+      const order = codOrder('Switched to COD; abandoned Razorpay order order_other');
+      const b = raw('payment.captured');
+      await expect(make(order).handleWebhook(b, sig(b))).resolves.toEqual({ ok: true });
+      expect(order.refundNote).not.toContain('PAYMENT');
+    });
+
+    it('markPaid ALREADY_PAID on a non-RAZORPAY order warns with order and payment id', async () => {
+      const order = baseOrder({ paymentMethod: 'COD' });
+      await expect(make(order).markPaid(7, 'pay_cod2')).resolves.toBe('ALREADY_PAID');
+      const msg = warnSpy.mock.calls.map((c) => String(c[0])).find((m) => m.includes('pay_cod2'));
+      expect(msg).toBeDefined();
+      expect(msg).toContain('7');
+    });
+
+    it('markPaid ALREADY_PAID on a RAZORPAY order does not warn', async () => {
+      const order = baseOrder({ paymentStatus: 'PAID' });
+      await expect(make(order).markPaid(7, 'pay_dup')).resolves.toBe('ALREADY_PAID');
+      expect(warnSpy).not.toHaveBeenCalled();
     });
   });
 });
