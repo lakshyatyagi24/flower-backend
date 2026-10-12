@@ -1,13 +1,27 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
+// Count only ACTIVE products so storefront navigation can hide empty categories.
+const ACTIVE_PRODUCT_COUNT = { _count: { select: { products: { where: { active: true } } } } } as const;
+
+type WithCount<T extends { _count: { products: number } }> = Omit<T, '_count'> & { productCount: number };
+
+function withProductCount<T extends { _count: { products: number }; children?: any[] }>(row: T): WithCount<T> {
+  const { _count, children, ...rest } = row as any;
+  return {
+    ...rest,
+    ...(children ? { children: children.map((c: any) => withProductCount(c)) } : {}),
+    productCount: _count.products,
+  };
+}
+
 @Injectable()
 export class EcommerceService {
   constructor(private readonly prisma: PrismaService) {}
 
   // Return top-level active categories sorted by sortOrder
   async getCategories() {
-    return this.prisma.category.findMany({
+    const rows = await this.prisma.category.findMany({
       where: { parentId: null, active: true },
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
       select: {
@@ -21,14 +35,16 @@ export class EcommerceService {
         defaultGstRate: true,
         sortOrder: true,
         active: true,
-        children: { select: { id: true, name: true, slug: true } },
+        ...ACTIVE_PRODUCT_COUNT,
+        children: { select: { id: true, name: true, slug: true, active: true, ...ACTIVE_PRODUCT_COUNT } },
       },
     });
+    return rows.map(withProductCount);
   }
 
   // Return all categories with full hierarchy (admin)
   async getAllCategories() {
-    return this.prisma.category.findMany({
+    const rows = await this.prisma.category.findMany({
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
       select: {
         id: true,
@@ -42,8 +58,10 @@ export class EcommerceService {
         sortOrder: true,
         active: true,
         parentId: true,
+        ...ACTIVE_PRODUCT_COUNT,
         children: {
           select: {
+            ...ACTIVE_PRODUCT_COUNT,
             id: true,
             name: true,
             slug: true,
@@ -59,6 +77,7 @@ export class EcommerceService {
         },
       },
     });
+    return rows.map(withProductCount);
   }
 
   // Create a new category
