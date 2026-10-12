@@ -30,7 +30,7 @@ const TAG_RULES = [
   { key: 'lily', match: /\blil(y|ies)\b/, tags: ['sympathy', 'congratulations', 'wedding'] },
   { key: 'sunflower', match: /sunflower|helianthus/, tags: ['get-well-soon', 'birthday', 'just-because'] },
   // chrysanthemum covers button, disbud and santini; "helichrysum" is a different flower and does not match.
-  { key: 'chrysanthemum', match: /chrysanthemum|santini|\bmums?\b/, tags: ['sympathy', 'corporate', 'get-well-soon'] },
+  { key: 'chrysanthemum', match: /chrysanthemum|santini|\bmums?\b/, tags: ['sympathy', 'corporate'] },
   { key: 'carnation', match: /carnation|dianthus/, tags: ['birthday', 'just-because', 'get-well-soon'] },
   { key: 'gerbera', match: /gerbera/, tags: ['birthday', 'get-well-soon', 'congratulations'] },
   { key: 'tulip', match: /tulip/, tags: ['anniversary', 'just-because', 'birthday'] },
@@ -43,39 +43,51 @@ const TAG_RULES = [
   { key: 'assorted', match: /assorted|mixed/, tags: ['birthday', 'just-because', 'get-well-soon'] },
 ];
 
+// Sympathy flowers follow local custom: white / cream / ivory only. A name qualifies when it says so and
+// does not also name a vivid colour ("Pink and White" does not); tuberose (rajnigandha) is always white.
+const PALE = /\b(white|cream|ivory|pearl)\b/i;
+const VIVID = /\b(red|ruby|pink|blush|yellow|orange|purple|violet|mauve|peach|blue|green|bi-?colou?r)\b/i;
+
+function qualifiesForSympathy(rule, name) {
+  if (rule.key === 'tuberose') return true;
+  return PALE.test(name) && !VIVID.test(name);
+}
+
 /** Occasion tags for a product ({ name, slug }); [] for foliage, fillers and anything unrecognised. */
 function tagsForProduct(product) {
-  const text = `${product.name || ''} ${product.slug || ''}`.toLowerCase().replace(/[-_]+/g, ' ');
+  const name = String(product.name || '');
+  const text = `${name} ${product.slug || ''}`.toLowerCase().replace(/[-_]+/g, ' ');
   const rule = TAG_RULES.find((r) => r.match.test(text));
-  return rule ? [...rule.tags] : [];
+  if (!rule) return [];
+  return rule.tags.filter((t) => t !== 'sympathy' || qualifiesForSympathy(rule, name));
 }
 
 const categoryDescriptions = {
   'cut-flowers':
-    'Choose cut flowers by the bunch, from roses, lilies and chrysanthemums to orchids, carnations and hydrangea. ' +
-    'Each variety is available in its own colours, so you can keep a vase to one clean shade or mix several for texture and depth. ' +
-    'Trim the stems at an angle, strip any leaves that would sit below the waterline and change the water every couple of days ' +
-    'to help the blooms last. Hand-selected stems are a good starting point for your own arrangement, gift or event.',
+    'Cut flowers sold by the bunch: roses, lilies, chrysanthemums, orchids, carnations, hydrangea and more, each in its own range of colours. ' +
+    'Keep a vase to a single shade for a clean look, or combine two or three varieties for contrast in shape and texture. ' +
+    'At home, cut the stems on a slant, remove any leaves below the waterline and use a clean vase. ' +
+    'Browse by flower and colour, then add your own foliage or fillers to build an arrangement that suits the room.',
   plants:
-    'Indoor and outdoor plants for homes, balconies and workspaces. A potted plant is a gift that keeps growing, ' +
-    'and a good choice when cut flowers feel too short-lived. Check the light and watering notes on each product, ' +
-    'and match the plant to the spot it will live in: bright, indirect light suits most indoor foliage, ' +
-    'while hardy flowering plants prefer a sunny balcony. Plants are added to the collection as they become available.',
+    'Indoor and outdoor plants for homes, balconies and workspaces. A potted plant suits someone who would rather keep a gift than watch it fade, ' +
+    'and it sits easily on a desk or windowsill. Read the light and watering notes on each product and match the plant to its spot: ' +
+    'bright, indirect light suits most indoor foliage, while flowering plants usually want direct sun. ' +
+    'New plants are added to this collection as they are listed.',
   'corporate-bouquets':
-    'Bouquets for offices, conferences, product launches and client gifting across Delhi NCR. ' +
-    'These are made to order in bulk, so tell us the quantity, budget, colour palette and date and we will send a quote. ' +
-    'Structured, upright designs in white, green and a single accent colour tend to suit a professional setting, ' +
-    'and orchids, lilies and chrysanthemums hold their shape well through a long event. Add your company message on a card.',
+    'Bouquets for offices, conferences, product launches and client gifts in Delhi NCR, arranged to a brief. ' +
+    'Send an enquiry with the quantity, colour palette, budget and date and we will reply with a quote. ' +
+    'Upright, structured designs in white, green and one accent colour suit a professional setting, ' +
+    'and orchids, lilies and chrysanthemums keep their shape through a long event. A printed or handwritten message can go with each bouquet.',
   arrangements:
-    'Custom-built floral arrangements for events, tables, entrances and gifts. Each one is designed around your brief, ' +
-    'so share the occasion, the colours you like and where the arrangement will sit and we will propose a design and price. ' +
-    'Compact table pieces suit dining and reception areas, while taller designs work for entrances and stages. ' +
-    'Roses, lilies, hydrangea and lisianthus are popular bases because they are full and photograph well.',
+    'Floral arrangements designed to a brief for events, tables, entrances and gifts. ' +
+    'Share the occasion, the colours you like and where the piece will sit, and we will propose a design and a price after your enquiry. ' +
+    'Low, compact pieces suit dining tables and reception desks, while taller designs work for entrances and stages. ' +
+    'Roses, lilies, hydrangea and lisianthus are common bases because their full heads fill space quickly.',
   hampers:
-    'Gift hampers that combine flowers, plants and thoughtful extras in one package. They are put together to order, ' +
-    'so tell us who the gift is for, the occasion and your budget and we will suggest a combination. ' +
-    'A small hamper with a bouquet and a handwritten card suits a birthday or a thank-you, while a larger selection ' +
-    'works for festivals, weddings and corporate gifting. Enquire with your preferences and we will take it from there.',
+    'Gift hampers that pair flowers or plants with extras, put together from your enquiry. ' +
+    'Tell us who the gift is for, the occasion and your budget, and we will suggest a combination. ' +
+    'A small hamper with a bouquet and a card suits a birthday or a thank-you, while a larger selection fits festivals, weddings and corporate gifting. ' +
+    'Each hamper is assembled around your brief, so contents and quantities can be adjusted.',
 };
 
 /**
@@ -114,8 +126,13 @@ async function applyTaxonomy(prisma) {
 
   const perTag = Object.fromEntries(OCCASION_TAGS.map((t) => [t, 0]));
   let tagged = 0;
-  const products = await prisma.product.findMany({ select: { id: true, name: true, slug: true, tags: true } });
+  // Only the seeded cut-flower catalogue is auto-tagged; a hamper or plant is never guessed from its name.
+  // Empty tags mean "untagged", so a cut flower whose tags an admin cleared is tagged again.
+  const products = await prisma.product.findMany({
+    select: { id: true, name: true, slug: true, tags: true, category: { select: { slug: true } } },
+  });
   for (const p of products) {
+    if (!p.category || p.category.slug !== 'cut-flowers') continue;
     if (p.tags && p.tags.length > 0) continue;
     const tags = tagsForProduct(p);
     if (tags.length === 0) continue;
