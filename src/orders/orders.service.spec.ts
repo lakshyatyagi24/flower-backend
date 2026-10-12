@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 
 function makeFakes(existingStatus = 'PAID') {
@@ -266,5 +266,80 @@ describe('OrdersService guarded status transitions (stale read)', () => {
     await expect(svc.adminUpdate(5, { trackingNumber: 'X' })).resolves.toBeDefined();
     expect(tx.order.updateMany).not.toHaveBeenCalled();
     expect(tx.order.update).toHaveBeenCalled();
+  });
+});
+
+describe('OrdersService.switchToCod', () => {
+  const rzpOrder = (over: any = {}) => ({
+    id: 5, userId: null, status: 'PENDING', paymentStatus: 'UNPAID', paymentMethod: 'RAZORPAY',
+    razorpayOrderId: 'order_x', razorpayPaymentId: null, customerEmail: 'c@x.com', refundNote: 'owner note', items: [], ...over,
+  });
+  function setup(order: any) {
+    const matches = (where: any) =>
+      Object.entries(where).every(([k, v]: [string, any]) =>
+        v && typeof v === 'object' && 'in' in v ? v.in.includes(order[k]) : (order[k] ?? null) === v,
+      );
+    const prisma: any = {
+      order: {
+        findUnique: jest.fn(async ({ where }: any) => (where.id === order.id ? { ...order } : null)),
+        updateMany: jest.fn(async ({ where, data }: any) => {
+          const ok = order.id === where.id && matches(where);
+          if (ok) Object.assign(order, data);
+          return { count: ok ? 1 : 0 };
+        }),
+      },
+    };
+    const mail: any = { sendOrderPlaced: jest.fn(async () => undefined) };
+    return { svc: new OrdersService(prisma, mail), prisma, mail };
+  }
+
+  it('success: CAS switch, nulls razorpayOrderId, one placed mail, customer-safe shape', async () => {
+    const order = rzpOrder();
+    const { svc, mail } = setup(order);
+    const res: any = await svc.switchToCod(5, null, 'C@X.com');
+    expect(order).toMatchObject({ paymentMethod: 'COD', razorpayOrderId: null, paymentStatus: 'UNPAID' });
+    expect(mail.sendOrderPlaced).toHaveBeenCalledTimes(1);
+    expect(res.paymentMethod).toBe('COD');
+    expect(res).not.toHaveProperty('refundNote');
+    expect(res.razorpayOrderId ?? null).toBeNull();
+  });
+
+  it('FAILED payment status can switch too and resets to UNPAID', async () => {
+    const order = rzpOrder({ paymentStatus: 'FAILED' });
+    await setup(order).svc.switchToCod(5, null, 'c@x.com');
+    expect(order).toMatchObject({ paymentMethod: 'COD', paymentStatus: 'UNPAID' });
+  });
+
+  it('second call is idempotent: 200-shape result, no second mail', async () => {
+    const { svc, mail } = setup(rzpOrder());
+    await svc.switchToCod(5, null, 'c@x.com');
+    const again: any = await svc.switchToCod(5, null, 'c@x.com');
+    expect(again.paymentMethod).toBe('COD');
+    expect(mail.sendOrderPlaced).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['paid', { paymentStatus: 'PAID', status: 'PAID' }],
+    ['has a payment id', { razorpayPaymentId: 'pay_1' }],
+    ['cancelled', { status: 'CANCELLED' }],
+    ['shipped', { status: 'SHIPPED' }],
+  ])('409 when %s, no mail, order untouched', async (_n, over) => {
+    const order = rzpOrder(over);
+    const { svc, mail } = setup(order);
+    await expect(svc.switchToCod(5, null, 'c@x.com')).rejects.toThrow(ConflictException);
+    await expect(svc.switchToCod(5, null, 'c@x.com')).rejects.toThrow('Order can no longer be switched to cash on delivery');
+    expect(order.paymentMethod).toBe('RAZORPAY');
+    expect(mail.sendOrderPlaced).not.toHaveBeenCalled();
+  });
+
+  it('403 for unknown order, wrong/missing guest email, and logged-in non-owner', async () => {
+    const { svc, mail } = setup(rzpOrder({ userId: null }));
+    await expect(svc.switchToCod(999, null, 'c@x.com')).rejects.toThrow(ForbiddenException);
+    await expect(svc.switchToCod(5, null, 'other@x.com')).rejects.toThrow('Not your order');
+    await expect(svc.switchToCod(5, null, null)).rejects.toThrow(ForbiddenException);
+    const owned = setup(rzpOrder({ userId: 3 }));
+    await expect(owned.svc.switchToCod(5, 4, 'c@x.com')).rejects.toThrow(ForbiddenException);
+    await expect(owned.svc.switchToCod(5, 3, null)).resolves.toMatchObject({ paymentMethod: 'COD' });
+    expect(mail.sendOrderPlaced).not.toHaveBeenCalled();
   });
 });

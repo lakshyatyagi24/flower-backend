@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Param,
   Post,
   Put,
@@ -10,11 +11,13 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { OrdersService } from './orders.service';
 import { CurrentUser, JwtAuthGuard, OptionalJwtAuthGuard, Roles } from '../auth/auth.guard';
 import { JwtPayload } from '../auth/jwt.util';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
+import { SetPaymentMethodDto } from './dto/set-payment-method.dto';
 import { AdminUpdateOrderDto } from './dto/admin-update-order.dto';
 
 @Controller('orders')
@@ -26,6 +29,21 @@ export class OrdersController {
   @Post()
   async create(@Body() body: CreateOrderDto, @Req() req: { user?: JwtPayload }) {
     return this.orders.create(req.user?.sub ?? null, body);
+  }
+
+  // Customer switches their own unpaid online order to cash on delivery (logged-in owner, or guest + email).
+  @UseGuards(OptionalJwtAuthGuard)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @HttpCode(200)
+  @Put(':id/payment-method')
+  async setPaymentMethod(
+    @Param('id') id: string,
+    @Body() body: SetPaymentMethodDto,
+    @Req() req: { user?: JwtPayload },
+  ) {
+    const numeric = parseInt(id, 10);
+    if (isNaN(numeric)) throw new BadRequestException('Invalid order ID');
+    return this.orders.switchToCod(numeric, req.user?.sub ?? null, body.email ?? null);
   }
 
   // Authenticated user's own orders

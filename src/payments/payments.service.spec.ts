@@ -216,6 +216,13 @@ describe('PaymentsService', () => {
       expect(order.paymentStatus).toBe('PAID');
     });
 
+    it('refuses a COD order (defence in depth): ALREADY_PAID, nothing flipped, no mail', async () => {
+      const order = baseOrder({ paymentMethod: 'COD' });
+      await expect(make(order).markPaid(7, 'pay_cod')).resolves.toBe('ALREADY_PAID');
+      expect(order).toMatchObject({ paymentStatus: 'UNPAID', status: 'PENDING', razorpayPaymentId: null });
+      expect(mail.sendOrderPaid).not.toHaveBeenCalled();
+    });
+
     it('does not resurrect a REFUNDED order', async () => {
       const order = baseOrder({ paymentStatus: 'REFUNDED' });
       await expect(make(order).markPaid(7, 'pay_5')).resolves.toBe('ALREADY_PAID');

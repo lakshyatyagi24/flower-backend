@@ -120,7 +120,9 @@ export class PaymentsService {
     // order paymentStatus=PAID but status=PENDING (a retry would see ALREADY_PAID and never fix it).
     const won = await this.prisma.$transaction(async (tx: any) => {
       const flipped = await tx.order.updateMany({
-        where: { id: orderId, paymentStatus: { in: ['UNPAID', 'FAILED'] } },
+        // paymentMethod guard: a COD order (e.g. switched after an abandoned online attempt) must never
+        // be flipped to PAID by a stray payment id.
+        where: { id: orderId, paymentMethod: 'RAZORPAY', paymentStatus: { in: ['UNPAID', 'FAILED'] } },
         data: { paymentStatus: 'PAID', razorpayPaymentId, paidAt: new Date() },
       });
       if (flipped.count !== 1) return false;

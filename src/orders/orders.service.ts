@@ -205,6 +205,46 @@ export class OrdersService {
     return rest;
   }
 
+  /**
+   * Switch an unpaid online (RAZORPAY) order to cash on delivery. Ownership mirrors
+   * PaymentsService.createRazorpayOrder: unknown and not-yours are both 403. The write is CAS-guarded
+   * and nulls razorpayOrderId so a late capture on the abandoned Razorpay order can never mark this
+   * COD order PAID (the webhook then sees an unknown order; the owner refunds manually).
+   */
+  async switchToCod(orderId: number, userId: number | null, email: string | null) {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    const guestEmail = email?.trim().toLowerCase();
+    const owns = order
+      ? userId
+        ? order.userId === userId
+        : !!guestEmail && !!order.customerEmail && order.customerEmail.trim().toLowerCase() === guestEmail
+      : false;
+    if (!order || !owns) throw new ForbiddenException('Not your order');
+
+    const switched = await this.prisma.order.updateMany({
+      where: {
+        id: orderId,
+        paymentMethod: 'RAZORPAY',
+        status: 'PENDING',
+        paymentStatus: { in: ['UNPAID', 'FAILED'] },
+        razorpayPaymentId: null,
+      },
+      data: { paymentMethod: 'COD', razorpayOrderId: null, paymentStatus: 'UNPAID' },
+    });
+
+    const fresh = await this.prisma.order.findUnique({ where: { id: orderId }, include: this.include });
+    if (switched.count === 1) {
+      if (fresh) void this.mail.sendOrderPlaced(fresh).catch(() => undefined);
+    } else if (!fresh || fresh.paymentMethod !== 'COD' || fresh.status === 'CANCELLED' || fresh.paymentStatus === 'PAID' || fresh.razorpayPaymentId) {
+      // Already-COD is idempotent (below); anything else is a lost race or a non-switchable order.
+      throw new ConflictException('Order can no longer be switched to cash on delivery');
+    }
+    if (!fresh) throw new ConflictException('Order can no longer be switched to cash on delivery');
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { razorpayOrderId: _o, razorpayPaymentId: _p, ...safe } = this.forCustomer(fresh);
+    return safe;
+  }
+
   async listMine(userId: number) {
     const rows = await this.prisma.order.findMany({
       where: { userId },
