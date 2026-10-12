@@ -1,5 +1,5 @@
 import { PartialType } from '@nestjs/mapped-types';
-import { IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, MaxLength, Min } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, MaxLength, Min } from 'class-validator';
 
 export class CreateProductDto {
   @IsString() @MaxLength(120) name!: string;
@@ -22,6 +22,7 @@ export class CreateProductDto {
   @IsOptional() @IsNumber() @Min(0) gstRate?: number;
   @IsOptional() @IsString() @MaxLength(20) unit?: string;
   @IsOptional() @IsInt() @Min(1) minOrderQty?: number;
+  @IsOptional() @IsArray() @ArrayMaxSize(20) @IsString({ each: true }) @MaxLength(40, { each: true }) tags?: string[];
   @IsOptional() @IsInt() categoryId?: number | null;
 }
 export class UpdateProductDto extends PartialType(CreateProductDto) {}

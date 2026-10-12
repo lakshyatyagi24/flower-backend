@@ -10,6 +10,9 @@ interface ListParams {
   saleMode?: string;
   take?: number;
   skip?: number;
+  tag?: string;
+  sort?: string;
+  page?: number;
 }
 
 type ProductTypeValue = 'CUT_FLOWER' | 'PLANT' | 'BOUQUET' | 'ARRANGEMENT' | 'HAMPER';
@@ -30,10 +33,37 @@ interface ProductInput {
   gstRate?: number;
   unit?: string;
   minOrderQty?: number;
+  tags?: string[];
 }
 
 const VALID_PRODUCT_TYPES: ProductTypeValue[] = ['CUT_FLOWER', 'PLANT', 'BOUQUET', 'ARRANGEMENT', 'HAMPER'];
 const VALID_SALE_MODES: SaleModeValue[] = ['PURCHASE', 'ENQUIRY'];
+
+const TAG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const TAG_MAX_LEN = 40;
+const TAG_MAX_COUNT = 20;
+const TAG_ERROR = 'Tags must be lowercase letters, numbers and hyphens';
+
+/** Trim, lowercase and de-duplicate tags; throws 400 if any is not a valid slug or there are too many. */
+export function normalizeTags(input: unknown): string[] {
+  if (!Array.isArray(input)) throw new BadRequestException('Tags must be an array');
+  const out: string[] = [];
+  for (const raw of input) {
+    if (typeof raw !== 'string') throw new BadRequestException(TAG_ERROR);
+    const tag = raw.trim().toLowerCase();
+    if (!tag || tag.length > TAG_MAX_LEN || !TAG_RE.test(tag)) throw new BadRequestException(TAG_ERROR);
+    if (!out.includes(tag)) out.push(tag);
+  }
+  if (out.length > TAG_MAX_COUNT) throw new BadRequestException(`A product can have at most ${TAG_MAX_COUNT} tags`);
+  return out;
+}
+
+const SORT_ORDERS: Record<string, Record<string, unknown>[]> = {
+  newest: [{ createdAt: 'desc' }, { id: 'desc' }],
+  price_asc: [{ price: 'asc' }, { id: 'desc' }],
+  price_desc: [{ price: 'desc' }, { id: 'desc' }],
+  popular: [{ reviews: { _count: 'desc' } }, { createdAt: 'desc' }, { id: 'desc' }],
+};
 
 function slugify(input: string): string {
   return input
@@ -109,6 +139,7 @@ export class ProductsService {
     gstRate: true,
     unit: true,
     minOrderQty: true,
+    tags: true,
     categoryId: true,
     category: { select: { id: true, name: true, slug: true, productType: true, defaultSaleMode: true } },
     createdAt: true,
@@ -164,6 +195,9 @@ export class ProductsService {
     if (params.saleMode && VALID_SALE_MODES.includes(params.saleMode as SaleModeValue)) {
       where.saleMode = params.saleMode;
     }
+    if (typeof params.tag === 'string' && TAG_RE.test(params.tag) && params.tag.length <= TAG_MAX_LEN) {
+      where.tags = { has: params.tag };
+    }
     if (params.q) {
       const q = params.q;
       where.OR = [
@@ -172,11 +206,16 @@ export class ProductsService {
       ];
     }
     const take = Math.min(Math.max(params.take ?? 50, 1), 200);
-    const skip = Math.max(params.skip ?? 0, 0);
+    const pageGiven = typeof params.page === 'number' && Number.isInteger(params.page) && params.page >= 1;
+    const skip = pageGiven ? (params.page as number - 1) * take : Math.max(params.skip ?? 0, 0);
+    const page = pageGiven ? (params.page as number) : Math.floor(skip / take) + 1;
+    const orderBy = Object.prototype.hasOwnProperty.call(SORT_ORDERS, params.sort ?? '')
+      ? SORT_ORDERS[params.sort as string]
+      : SORT_ORDERS.newest;
     const [rawItems, total] = await Promise.all([
       this.prisma.product.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         select: this.select,
         take,
         skip,
@@ -188,7 +227,7 @@ export class ProductsService {
       image: normalizeImageUrl(item.image),
     }));
     const items = await this.attachRatings(sanitizedItems);
-    return { items, total, take, skip };
+    return { items, total, take, skip, page, pages: Math.max(1, Math.ceil(total / take)) };
   }
 
   async getBySlug(slug: string) {
@@ -229,6 +268,7 @@ export class ProductsService {
           unit: input.unit?.trim() || 'piece',
           minOrderQty: input.minOrderQty && input.minOrderQty > 0 ? Math.floor(input.minOrderQty) : 1,
           categoryId: input.categoryId ?? null,
+          tags: input.tags === undefined ? [] : normalizeTags(input.tags),
         },
         select: this.select,
       });
@@ -275,6 +315,7 @@ export class ProductsService {
     if (input.minOrderQty !== undefined) {
       data.minOrderQty = input.minOrderQty && input.minOrderQty > 0 ? Math.floor(input.minOrderQty) : 1;
     }
+    if (input.tags !== undefined) data.tags = normalizeTags(input.tags);
     try {
       return await this.prisma.product.update({ where: { id }, data, select: this.select });
     } catch (e: any) {

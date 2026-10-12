@@ -30,6 +30,9 @@ export class ProductsController {
     @Query('saleMode') saleMode?: string,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
+    @Query('tag') tag?: string,
+    @Query('sort') sort?: string,
+    @Query('page') page?: string,
   ) {
     return this.products.list({
       category,
@@ -40,6 +43,9 @@ export class ProductsController {
       saleMode,
       take: take ? parseInt(take, 10) : undefined,
       skip: skip ? parseInt(skip, 10) : undefined,
+      tag,
+      sort,
+      page: page ? parseInt(page, 10) : undefined,
     });
   }
 
@@ -57,6 +63,9 @@ export class ProductsController {
     @Query('saleMode') saleMode?: string,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
+    @Query('tag') tag?: string,
+    @Query('sort') sort?: string,
+    @Query('page') page?: string,
   ) {
     return this.products.list({
       category,
@@ -67,6 +76,9 @@ export class ProductsController {
       saleMode,
       take: take ? parseInt(take, 10) : undefined,
       skip: skip ? parseInt(skip, 10) : undefined,
+      tag,
+      sort,
+      page: page ? parseInt(page, 10) : undefined,
     });
   }
 
