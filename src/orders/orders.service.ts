@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizeIndianPhone } from '../common/validators';
 import { MailService } from '../mail/mail.service';
+import { joinRefundNote, splitRefundNote } from './refund-note';
 
 interface OrderItemInput {
   productId: number;
@@ -43,11 +44,20 @@ const STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
 const PAYMENT_STATUSES = ['UNPAID', 'PAID', 'FAILED', 'REFUNDED'] as const;
 const PAYMENT_METHODS = ['COD', 'RAZORPAY'] as const;
 const MISMATCH_MARKER = 'AMOUNT MISMATCH';
+const POST_SWITCH_MARKER = 'CAPTURED AFTER SWITCH';
 
-// Orders needing the owner's attention (admin filter). Shared shapes with stats().
-const ATTENTION_WHERE: Record<string, Record<string, unknown>> = {
+type AttentionKey = 'refund' | 'mismatch' | 'awaiting';
+
+// Orders needing the owner's attention. Defined ONCE; listAll(attention) and stats() both use these.
+const ATTENTION_WHERE: Record<AttentionKey, Record<string, unknown>> = {
+  // paid, then cancelled: money is owed back (REFUNDED excluded by construction)
   refund: { paymentStatus: 'PAID', status: 'CANCELLED' },
-  mismatch: { refundNote: { contains: MISMATCH_MARKER } },
+  // "capture needs manual review": amount mismatch, or a payment captured after a switch to COD
+  mismatch: {
+    OR: [{ refundNote: { contains: MISMATCH_MARKER } }, { refundNote: { contains: POST_SWITCH_MARKER } }],
+    paymentStatus: { not: 'REFUNDED' },
+  },
+  // online order still waiting for its payment
   awaiting: { paymentMethod: 'RAZORPAY', paymentStatus: { in: ['UNPAID', 'FAILED'] }, status: 'PENDING' },
 };
 
@@ -317,7 +327,7 @@ export class OrdersService {
       where.paymentMethod = params.paymentMethod;
     }
     if (params.attention && Object.prototype.hasOwnProperty.call(ATTENTION_WHERE, params.attention)) {
-      where.AND = [ATTENTION_WHERE[params.attention]];
+      where.AND = [ATTENTION_WHERE[params.attention as AttentionKey]];
     }
     const take = Math.min(Math.max(params.take ?? 50, 1), 200);
     const skip = Math.max(params.skip ?? 0, 0);
@@ -460,20 +470,44 @@ export class OrdersService {
     if (patch.city !== undefined) data.city = patch.city || null;
     if (patch.postalCode !== undefined) data.postalCode = patch.postalCode || null;
     if (patch.customerPhone !== undefined) data.customerPhone = patch.customerPhone || null;
-    if (patch.refundNote !== undefined) data.refundNote = patch.refundNote?.trim() || null;
     if (patch.paymentStatus !== undefined && patch.paymentStatus !== 'REFUNDED') {
       throw new BadRequestException('Invalid payment status');
     }
     const markRefunded = patch.paymentStatus === 'REFUNDED';
 
+    // Admin text replaces only the ADMIN part of refundNote; system trace lines are always preserved
+    // (and system-looking lines in the submitted text are stripped, so they cannot be forged/duplicated).
+    const readNote: string | null = existing.refundNote ?? null;
+    let newNote: string | null | undefined;
+    if (patch.refundNote !== undefined) {
+      newNote = joinRefundNote(splitRefundNote(patch.refundNote).admin, splitRefundNote(readNote).system);
+    }
+    const writeNote = newNote !== undefined && newNote !== readNote;
+
+    if (markRefunded) {
+      // PAID, or UNPAID with our own trace that money was captured (post-COD-switch capture / mismatch).
+      const traced = readNote !== null && (readNote.includes(POST_SWITCH_MARKER) || readNote.includes(MISMATCH_MARKER));
+      const eligible = existing.paymentStatus === 'PAID' || (existing.paymentStatus === 'UNPAID' && traced);
+      if (!eligible) throw new ConflictException('Only a paid order can be marked refunded');
+    }
+
     const updated = await this.prisma.$transaction(async (tx) => {
-      if (markRefunded) {
-        // Compare-and-set: only a PAID order can be marked refunded. Never touches status/stock/mail.
-        const flipped = await tx.order.updateMany({
-          where: { id, paymentStatus: 'PAID' },
-          data: { paymentStatus: 'REFUNDED' },
-        });
-        if (flipped.count !== 1) throw new ConflictException('Only a paid order can be marked refunded');
+      if (markRefunded || writeNote) {
+        // Compare-and-set on the paymentStatus and note we read: a webhook trace appended meanwhile makes
+        // this match nothing, so it can never be silently overwritten. Never touches status/stock/mail.
+        const cas: Record<string, unknown> = { id, refundNote: readNote };
+        if (markRefunded) cas.paymentStatus = existing.paymentStatus;
+        const casData: Record<string, unknown> = {};
+        if (markRefunded) casData.paymentStatus = 'REFUNDED';
+        if (writeNote) casData.refundNote = newNote;
+        const res = await tx.order.updateMany({ where: cas, data: casData });
+        if (res.count !== 1) {
+          const now = await tx.order.findUnique({ where: { id } });
+          if (markRefunded && now && now.paymentStatus !== existing.paymentStatus) {
+            throw new ConflictException('Only a paid order can be marked refunded');
+          }
+          throw new ConflictException('The note was changed meanwhile - reload and try again');
+        }
       }
       if (data.status !== undefined) return this.transition(tx, id, fromStatus, data.status as OrderStatus, data);
       // No status change: plain field edits stay unguarded.
@@ -502,10 +536,9 @@ export class OrdersService {
         },
       }),
       this.prisma.enquiry.count({ where: { status: { in: ['NEW', 'CONTACTED', 'QUOTED'] } } }),
-      this.prisma.order.count({ where: { paymentMethod: 'RAZORPAY', status: 'PENDING', paymentStatus: { in: ['UNPAID', 'FAILED'] } } }),
-      // REFUNDED is excluded by construction (paymentStatus must still be PAID).
-      this.prisma.order.count({ where: { paymentStatus: 'PAID', status: 'CANCELLED' } }),
-      this.prisma.order.count({ where: { refundNote: { contains: MISMATCH_MARKER }, paymentStatus: { not: 'REFUNDED' } } }),
+      this.prisma.order.count({ where: ATTENTION_WHERE.awaiting }),
+      this.prisma.order.count({ where: ATTENTION_WHERE.refund }),
+      this.prisma.order.count({ where: ATTENTION_WHERE.mismatch }),
     ]);
     return {
       orderCount,

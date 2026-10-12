@@ -520,7 +520,7 @@ describe('PaymentsService', () => {
       expect(order.refundNote).toBe(`Switched to COD; abandoned Razorpay order order_old\n${TRACE}`);
       expect(order).toMatchObject({ status: 'PENDING', paymentStatus: 'UNPAID', paymentMethod: 'COD', razorpayPaymentId: null });
       const msgs = warnSpy.mock.calls.map((c) => String(c[0]));
-      const traced = msgs.filter((m) => m.includes('pay_late') && m.includes('7'));
+      const traced = msgs.filter((m) => m.includes('order 7:') && m.includes('payment pay_late '));
       expect(traced).toHaveLength(1);
       expect(msgs.join(' | ')).not.toContain(WH);
     });
@@ -551,13 +551,33 @@ describe('PaymentsService', () => {
       await expect(make(order).markPaid(7, 'pay_cod2')).resolves.toBe('ALREADY_PAID');
       const msg = warnSpy.mock.calls.map((c) => String(c[0])).find((m) => m.includes('pay_cod2'));
       expect(msg).toBeDefined();
-      expect(msg).toContain('7');
+      expect(msg).toContain('order 7 ');
     });
 
     it('markPaid ALREADY_PAID on a RAZORPAY order does not warn', async () => {
       const order = baseOrder({ paymentStatus: 'PAID' });
       await expect(make(order).markPaid(7, 'pay_dup')).resolves.toBe('ALREADY_PAID');
       expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('exhausted CAS attempts: logs the ids so the owner can reconstruct, still returns ok', async () => {
+      const prisma = fakePrisma(codOrder());
+      prisma.order.updateMany.mockResolvedValue({ count: 0 });
+      const b = raw('payment.captured');
+      await expect(makeWith(prisma).handleWebhook(b, sig(b))).resolves.toEqual({ ok: true });
+      expect(prisma.order.updateMany).toHaveBeenCalledTimes(3);
+      const msgs = warnSpy.mock.calls.map((c) => String(c[0]));
+      expect(msgs).toContain('post-switch capture NOT traced: payment pay_late on razorpay order order_old; refund manually');
+      expect(msgs.join(' | ')).not.toContain(WH);
+    });
+
+    it('a thrown error while tracing logs the ids too, still returns ok', async () => {
+      const prisma = fakePrisma(codOrder());
+      prisma.order.findFirst.mockRejectedValue(new Error('db down'));
+      const b = raw('payment.captured');
+      await expect(makeWith(prisma).handleWebhook(b, sig(b))).resolves.toEqual({ ok: true });
+      const msgs = warnSpy.mock.calls.map((c) => String(c[0]));
+      expect(msgs).toContain('post-switch capture NOT traced: payment pay_late on razorpay order order_old; refund manually');
     });
   });
 });

@@ -84,6 +84,42 @@ describe('Admin payment visibility + capture after COD switch (e2e)', () => {
     expect(mail.sendOrderPaid).not.toHaveBeenCalled();
   });
 
+  it('a switched+captured order is flagged in attention=mismatch and stats.mismatches; admin cannot erase the trace; REFUNDED clears it', async () => {
+    // Other e2e suites share this DB and run in parallel, so a global before/after delta is racy.
+    // Instead read the card count and the list total back-to-back (retrying if another suite moved
+    // the data between the two reads); they must be equal because they share one criterion.
+    const snapshot = async () => {
+      for (let i = 0; i < 8; i++) {
+        const list = (await adminGet('/orders?attention=mismatch&take=200').expect(200)).body;
+        const stats = (await adminGet('/orders/stats').expect(200)).body;
+        const again = (await adminGet('/orders?attention=mismatch&take=200').expect(200)).body;
+        if (list.total === again.total && stats.mismatches === list.total) return { ids: list.items.map((x: any) => x.id) as number[], n: list.total as number };
+      }
+      throw new Error('mismatch count and list never agreed');
+    };
+    const o = await makeOrder();
+    const oldId = o.razorpayOrderId as string;
+    await request(app.getHttpServer()).put(`/orders/${o.id}/payment-method`).send({ paymentMethod: 'COD', email }).expect(200);
+    expect((await snapshot()).ids).not.toContain(o.id); // marker only: nothing captured yet
+
+    await webhook(oldId, `pay_${tag}_flag`).expect(200);
+    expect((await snapshot()).ids).toContain(o.id);
+
+    const traced = (await prisma.order.findUnique({ where: { id: o.id } }))!.refundNote as string;
+    expect(traced).toContain(`PAYMENT pay_${tag}_flag CAPTURED AFTER SWITCH TO COD`);
+    // clearing / editing the note only touches the admin part
+    await adminPut(o.id, { refundNote: '' }).expect(200);
+    expect((await prisma.order.findUnique({ where: { id: o.id } }))!.refundNote).toBe(traced);
+    await adminPut(o.id, { refundNote: 'will refund via UPI' }).expect(200);
+    expect((await prisma.order.findUnique({ where: { id: o.id } }))!.refundNote).toBe(`will refund via UPI\n${traced}`);
+
+    // money was captured per our trace, so the owner may mark it refunded even though it is UNPAID
+    const res = await adminPut(o.id, { paymentStatus: 'REFUNDED' }).expect(200);
+    expect(res.body).toMatchObject({ paymentStatus: 'REFUNDED', status: 'PENDING' });
+    expect((await snapshot()).ids).not.toContain(o.id);
+    expect(mail.sendOrderShipped).not.toHaveBeenCalled();
+  });
+
   it('admin marks a PAID order REFUNDED (200) and an UNPAID one is a 409', async () => {
     const paid = await makeOrder({ paymentStatus: 'PAID', status: 'CANCELLED', razorpayPaymentId: `pay_${tag}_r` });
     const res = await adminPut(paid.id, { paymentStatus: 'REFUNDED', refundNote: '  refunded via UPI  ' }).expect(200);

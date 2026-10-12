@@ -345,6 +345,9 @@ describe('OrdersService.switchToCod', () => {
 });
 
 describe('OrdersService.adminUpdate payment fields', () => {
+  const SW = 'Switched to COD; abandoned Razorpay order order_old';
+  const CAP = 'PAYMENT pay_1 CAPTURED AFTER SWITCH TO COD - REFUND';
+  const MIS = 'AMOUNT MISMATCH: payment pay_2 captured 1 vs expected 2 - review/refund manually';
   function setup(over: any = {}) {
     const row: any = { id: 5, status: 'PENDING', paymentStatus: 'PAID', refundNote: null, items: [], ...over };
     const tx: any = {
@@ -353,6 +356,7 @@ describe('OrdersService.adminUpdate payment fields', () => {
           const conds: any[] = where.AND ?? [where];
           const ok = conds.every((c) => (c.id === undefined || row.id === c.id) &&
             (c.paymentStatus === undefined || row.paymentStatus === c.paymentStatus) &&
+            (c.refundNote === undefined || (row.refundNote ?? null) === c.refundNote) &&
             (c.status === undefined || typeof c.status !== 'string' ? c.status === undefined || row.status !== c.status.not : row.status === c.status));
           if (ok) Object.assign(row, data);
           return { count: ok ? 1 : 0 };
@@ -368,29 +372,44 @@ describe('OrdersService.adminUpdate payment fields', () => {
       $transaction: jest.fn(async (fn: any) => fn(tx)),
     };
     const mail: any = { sendOrderShipped: jest.fn(async () => undefined), sendOrderPaid: jest.fn(), sendOrderPlaced: jest.fn() };
-    return { row, tx, mail, svc: new OrdersService(prisma, mail) };
+    return { row, tx, mail, prisma, svc: new OrdersService(prisma, mail) };
   }
 
-  it('PAID -> REFUNDED via guarded CAS; status untouched, no restock, no mail', async () => {
+  it('PAID -> REFUNDED via guarded CAS (bound to the paymentStatus and note read); status untouched, no restock, no mail', async () => {
     const { svc, row, tx, mail } = setup({ status: 'CANCELLED' });
     await svc.adminUpdate(5, { paymentStatus: 'REFUNDED' });
     expect(row).toMatchObject({ paymentStatus: 'REFUNDED', status: 'CANCELLED' });
     expect(tx.order.updateMany).toHaveBeenCalledWith({
-      where: { id: 5, paymentStatus: 'PAID' },
+      where: { id: 5, paymentStatus: 'PAID', refundNote: null },
       data: { paymentStatus: 'REFUNDED' },
     });
     expect(tx.product.update).not.toHaveBeenCalled();
     expect(Object.values(mail).some((m: any) => m.mock.calls.length)).toBe(false);
   });
 
-  it.each(['UNPAID', 'REFUNDED', 'FAILED'])('%s -> REFUNDED is a Conflict and writes nothing', async (ps) => {
+  it.each(['UNPAID', 'REFUNDED', 'FAILED'])('plain %s -> REFUNDED is a Conflict and writes nothing', async (ps) => {
     const { svc, row } = setup({ paymentStatus: ps, refundNote: 'keep' });
     await expect(svc.adminUpdate(5, { paymentStatus: 'REFUNDED', refundNote: 'new' })).rejects.toThrow('Only a paid order can be marked refunded');
     await expect(svc.adminUpdate(5, { paymentStatus: 'REFUNDED' })).rejects.toBeInstanceOf(ConflictException);
     expect(row).toMatchObject({ paymentStatus: ps, refundNote: 'keep' });
   });
 
-  it('refundNote is trimmed; empty/whitespace/null clears; combines with the REFUNDED flip', async () => {
+  it.each([['CAPTURED AFTER SWITCH trace', `${SW}\n${CAP}`], ['AMOUNT MISMATCH trace', MIS]])(
+    'UNPAID + %s may be marked REFUNDED (money was captured per our own trace); note kept',
+    async (_n, note) => {
+      const { svc, row } = setup({ paymentStatus: 'UNPAID', status: 'PENDING', refundNote: note });
+      await svc.adminUpdate(5, { paymentStatus: 'REFUNDED' });
+      expect(row).toMatchObject({ paymentStatus: 'REFUNDED', status: 'PENDING', refundNote: note });
+    },
+  );
+
+  it('UNPAID with only the switch marker (nothing captured) is refused', async () => {
+    const { svc, row } = setup({ paymentStatus: 'UNPAID', refundNote: SW });
+    await expect(svc.adminUpdate(5, { paymentStatus: 'REFUNDED' })).rejects.toThrow('Only a paid order can be marked refunded');
+    expect(row.paymentStatus).toBe('UNPAID');
+  });
+
+  it('refundNote edits are trimmed; empty/whitespace/null clears only the admin part', async () => {
     const a = setup();
     await a.svc.adminUpdate(5, { refundNote: '  refunded via UPI  ' });
     expect(a.row.refundNote).toBe('refunded via UPI');
@@ -403,6 +422,40 @@ describe('OrdersService.adminUpdate payment fields', () => {
     const c = setup();
     await c.svc.adminUpdate(5, { paymentStatus: 'REFUNDED', refundNote: ' done ' });
     expect(c.row).toMatchObject({ paymentStatus: 'REFUNDED', refundNote: 'done' });
+  });
+
+  it('system lines survive an admin note edit and an admin clearing the note', async () => {
+    const { svc, row } = setup({ paymentStatus: 'UNPAID', refundNote: `admin old\n${SW}\n${CAP}\n${MIS}` });
+    await svc.adminUpdate(5, { refundNote: 'admin new' });
+    expect(row.refundNote).toBe(`admin new\n${SW}\n${CAP}\n${MIS}`);
+    await svc.adminUpdate(5, { refundNote: '' });
+    expect(row.refundNote).toBe(`${SW}\n${CAP}\n${MIS}`);
+    await svc.adminUpdate(5, { refundNote: null });
+    expect(row.refundNote).toBe(`${SW}\n${CAP}\n${MIS}`);
+  });
+
+  it('client-echoed system lines are not duplicated and forged system-looking lines are stripped', async () => {
+    const { svc, row } = setup({ paymentStatus: 'UNPAID', refundNote: `${SW}\n${CAP}` });
+    await svc.adminUpdate(5, { refundNote: `mine\n${SW}\n${CAP}` });
+    expect(row.refundNote).toBe(`mine\n${SW}\n${CAP}`);
+    await svc.adminUpdate(5, { refundNote: `hello\n${MIS}\nPAYMENT pay_forged CAPTURED AFTER SWITCH TO COD - REFUND` });
+    expect(row.refundNote).toBe(`hello\n${SW}\n${CAP}`);
+    const plain = setup({ refundNote: null });
+    await plain.svc.adminUpdate(5, { refundNote: `${MIS}` });
+    expect(plain.row.refundNote).toBeNull();
+  });
+
+  it('a note changed between read and write (CAS count 0) -> 409 and the concurrent line is kept', async () => {
+    const { svc, row, tx, prisma } = setup({ paymentStatus: 'UNPAID', refundNote: SW });
+    // the admin read saw SW; a webhook appends CAP before the admin's write lands
+    const stale = { ...row };
+    prisma.order.findUnique.mockImplementationOnce(async () => stale);
+    row.refundNote = `${SW}\n${CAP}`;
+    await expect(svc.adminUpdate(5, { refundNote: 'late edit' })).rejects.toThrow('The note was changed meanwhile - reload and try again');
+    expect(row.refundNote).toBe(`${SW}\n${CAP}`);
+    await expect(svc.adminUpdate(5, { refundNote: 'late edit' })).resolves.toBeDefined(); // fresh read now succeeds
+    expect(row.refundNote).toBe(`late edit\n${SW}\n${CAP}`);
+    expect(tx.order.updateMany).toHaveBeenCalledTimes(2);
   });
 
   it('REFUNDED flip combined with a status change keeps the status transition rules', async () => {
@@ -437,7 +490,10 @@ describe('OrdersService.listAll / stats payment filters', () => {
 
   it.each([
     ['refund', { paymentStatus: 'PAID', status: 'CANCELLED' }],
-    ['mismatch', { refundNote: { contains: 'AMOUNT MISMATCH' } }],
+    ['mismatch', {
+      OR: [{ refundNote: { contains: 'AMOUNT MISMATCH' } }, { refundNote: { contains: 'CAPTURED AFTER SWITCH' } }],
+      paymentStatus: { not: 'REFUNDED' },
+    }],
     ['awaiting', { paymentMethod: 'RAZORPAY', paymentStatus: { in: ['UNPAID', 'FAILED'] }, status: 'PENDING' }],
   ])('attention=%s builds the expected condition (ANDed with other filters) and count uses the same where', async (a, cond) => {
     const { svc, findMany, count } = setup();
@@ -451,20 +507,42 @@ describe('OrdersService.listAll / stats payment filters', () => {
     await expect(svc.listAll({ take: 9999, skip: -5 } as any)).resolves.toMatchObject({ take: 200, skip: 0 });
   });
 
-  it('stats exposes unpaidOnline, refundsDue and mismatches using the right criteria', async () => {
+  it('stats exposes unpaidOnline, refundsDue and mismatches using exactly the list criteria (key order irrelevant)', async () => {
     const { svc, count } = setup();
-    const key = (w: any) => JSON.stringify(w);
-    const answers = new Map<string, number>([
-      [key({ paymentMethod: 'RAZORPAY', status: 'PENDING', paymentStatus: { in: ['UNPAID', 'FAILED'] } }), 3],
-      [key({ paymentStatus: 'PAID', status: 'CANCELLED' }), 4],
-      [key({ refundNote: { contains: 'AMOUNT MISMATCH' }, paymentStatus: { not: 'REFUNDED' } }), 5],
-    ]);
-    count.mockImplementation(async (a: any) => (a?.where ? answers.get(key(a.where)) ?? 0 : 0));
+    const { isDeepStrictEqual } = require('util');
+    const sortOr = (w: any): any =>
+      w.OR ? { ...w, OR: [...w.OR].sort((x: any, y: any) => JSON.stringify(x).localeCompare(JSON.stringify(y))) } : w;
+    const answers: [any, number][] = [
+      [{ paymentStatus: { in: ['UNPAID', 'FAILED'] }, status: 'PENDING', paymentMethod: 'RAZORPAY' }, 3],
+      [{ status: 'CANCELLED', paymentStatus: 'PAID' }, 4],
+      [{
+        paymentStatus: { not: 'REFUNDED' },
+        OR: [{ refundNote: { contains: 'CAPTURED AFTER SWITCH' } }, { refundNote: { contains: 'AMOUNT MISMATCH' } }],
+      }, 5],
+    ];
+    count.mockImplementation(async (a: any) => {
+      const hit = answers.find(([w]) => a?.where && isDeepStrictEqual(sortOr(a.where), sortOr(w)));
+      return hit ? hit[1] : 0;
+    });
     const res: any = await svc.stats();
     expect(res).toMatchObject({ unpaidOnline: 3, refundsDue: 4, mismatches: 5 });
     for (const k of ['orderCount', 'productCount', 'customerCount', 'revenue', 'recentOrders', 'openEnquiries']) {
       expect(res).toHaveProperty(k);
     }
+  });
+
+  it('stats counts reuse the exact attention where-shapes used by the list', async () => {
+    const { svc, count, findMany } = setup();
+    const wheres: any[] = [];
+    for (const a of ['refund', 'mismatch', 'awaiting']) {
+      findMany.mockClear();
+      await svc.listAll({ attention: a } as any);
+      wheres.push(findMany.mock.calls[0][0].where.AND[0]);
+    }
+    count.mockClear();
+    await svc.stats();
+    const used = count.mock.calls.map((c: any[]) => JSON.stringify(c[0]?.where));
+    for (const w of wheres) expect(used).toContain(JSON.stringify(w));
   });
 });
 

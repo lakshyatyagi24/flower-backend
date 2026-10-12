@@ -245,6 +245,11 @@ export class PaymentsService {
    * so lookup by razorpayOrderId finds nothing). Find the order by the marker switchToCod left in its
    * refundNote and append a refund trace exactly once. Changes nothing but refundNote; never throws.
    */
+  private logNotTraced(rzpOrderId: string, paymentId: string) {
+    // ids only: never the body, signature or secrets
+    this.log.warn(`post-switch capture NOT traced: payment ${paymentId} on razorpay order ${rzpOrderId}; refund manually`);
+  }
+
   private async traceCaptureAfterCodSwitch(rzpOrderId: string, paymentId: unknown): Promise<void> {
     if (typeof paymentId !== 'string' || !paymentId) return;
     try {
@@ -266,8 +271,11 @@ export class PaymentsService {
           return;
         }
       }
+      // Attempts exhausted: the webhook still answers 200 (no redelivery), so the ids must be logged.
+      this.logNotTraced(rzpOrderId, paymentId);
     } catch (err) {
-      this.log.warn(`could not trace post-switch capture: ${err instanceof Error ? err.message : 'unknown error'}`);
+      this.log.warn(`post-switch capture trace error: ${err instanceof Error ? err.message : 'unknown error'}`);
+      this.logNotTraced(rzpOrderId, paymentId);
     }
   }
 
