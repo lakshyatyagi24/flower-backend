@@ -209,4 +209,71 @@ describe('Guest checkout authorization (e2e)', () => {
       await http().get(`/orders/${a.id}`).set('Authorization', auth(u2)).expect(403);
     });
   });
+
+  describe('one ownership rule (canAccessOrder)', () => {
+    let acct: { id: number; email: string };
+    let acctOrder: { id: number };
+    let guestOrder: { id: number };
+    const authFor = (u: { id: number; email: string }) => `Bearer ${signJwt({ sub: u.id, email: u.email, role: 'CUSTOMER' })}`;
+    beforeAll(async () => {
+      await prisma.product.update({ where: { id: productId }, data: { stock: 100 } });
+      acct = await prisma.user.create({ data: { email: `${tag}-owner@example.com`, password: 'x', name: 'Owner' } });
+      userIds.push(acct.id);
+      const res = await http().post('/orders').set('Authorization', authFor(acct)).send(body(acct.email)).expect(201);
+      acctOrder = res.body;
+      orderIds.push(res.body.id);
+      guestOrder = await place(`${tag}-g@example.com`);
+    });
+
+    it('anonymous + the registered customer email + order id is refused on pay and switch, exactly like a wrong guess', async () => {
+      const rzp = rzpCounter;
+      const real = await http().post('/payments/razorpay/order').send({ orderId: acctOrder.id, email: acct.email }).expect(403);
+      const wrong = await http().post('/payments/razorpay/order').send({ orderId: acctOrder.id, email: 'nobody@example.com' }).expect(403);
+      const unknown = await http().post('/payments/razorpay/order').send({ orderId: 2147483000, email: acct.email }).expect(403);
+      expect(real.body).toEqual(wrong.body);
+      expect(real.body).toEqual(unknown.body);
+      expect(rzpCounter).toBe(rzp);
+      const sw = await http().put(`/orders/${acctOrder.id}/payment-method`).send({ paymentMethod: 'COD', email: acct.email }).expect(403);
+      const swWrong = await http().put(`/orders/${acctOrder.id}/payment-method`).send({ paymentMethod: 'COD', email: 'nobody@example.com' }).expect(403);
+      expect(sw.body).toEqual(swWrong.body);
+      expect((await prisma.order.findUnique({ where: { id: acctOrder.id } }))!.paymentMethod).toBe('RAZORPAY');
+    });
+
+    it('another account holder with the owner email is also refused; the owner token works', async () => {
+      const other = await prisma.user.create({ data: { email: `${tag}-other@example.com`, password: 'x', name: 'Other' } });
+      userIds.push(other.id);
+      await http().post('/payments/razorpay/order').set('Authorization', authFor(other)).send({ orderId: acctOrder.id, email: acct.email }).expect(403);
+      await http().post('/payments/razorpay/order').set('Authorization', authFor(acct)).send({ orderId: acctOrder.id }).expect(200);
+    });
+
+    it('a signed-in user can still pay and switch a GUEST order with its matching email', async () => {
+      const u = await prisma.user.create({ data: { email: `${tag}-signedin@example.com`, password: 'x', name: 'SI' } });
+      userIds.push(u.id);
+      const email = `${tag}-g@example.com`;
+      await http().post('/payments/razorpay/order').set('Authorization', authFor(u)).send({ orderId: guestOrder.id }).expect(403);
+      await http().post('/payments/razorpay/order').set('Authorization', authFor(u)).send({ orderId: guestOrder.id, email: 'x@example.com' }).expect(403);
+      await http().post('/payments/razorpay/order').set('Authorization', authFor(u)).send({ orderId: guestOrder.id, email }).expect(200);
+      const sw = await http().put(`/orders/${guestOrder.id}/payment-method`).set('Authorization', authFor(u)).send({ paymentMethod: 'COD', email }).expect(200);
+      expect(sw.body.paymentMethod).toBe('COD');
+    });
+
+    it('track stays email-based for account orders (public tracking by design)', async () => {
+      await http().post(`/orders/track/${acctOrder.id}`).send({ email: acct.email }).expect(200);
+    });
+  });
+
+  describe('tracking throttle', () => {
+    it('GET and POST tracking share one bucket of 20 per minute', async () => {
+      const email = `${tag}-t@example.com`;
+      const o = await place(email);
+      let limited = 0;
+      for (let i = 0; i < 24; i++) {
+        const r = i % 2 === 0
+          ? await http().get(`/orders/track/${o.id}`).query({ email })
+          : await http().post(`/orders/track/${o.id}`).send({ email });
+        if (r.status === 429) limited++;
+      }
+      expect(limited).toBeGreaterThanOrEqual(4);
+    });
+  });
 });

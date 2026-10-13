@@ -21,6 +21,9 @@ import { SetPaymentMethodDto } from './dto/set-payment-method.dto';
 import { AdminUpdateOrderDto } from './dto/admin-update-order.dto';
 import { TrackOrderDto } from './dto/track-order.dto';
 
+// GET and POST tracking share ONE bucket per client, so the combined limit is 20/min.
+const TRACK_BUCKET = (_ctx: unknown, tracker: string, name: string) => `order-track-${name}-${tracker}`;
+
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly orders: OrdersService) {}
@@ -65,7 +68,7 @@ export class OrdersController {
   }
 
   // Public tracking by order id + email, email in the BODY (preferred: never reaches access logs).
-  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Throttle({ default: { limit: 20, ttl: 60_000, generateKey: TRACK_BUCKET } })
   @HttpCode(200)
   @Post('track/:id')
   async trackPost(@Param('id') id: string, @Body() body: TrackOrderDto) {
@@ -76,7 +79,7 @@ export class OrdersController {
 
   // Legacy: email in the query string (ends up in access logs). Kept so older clients and links keep working;
   // the storefront uses the POST variant above.
-  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Throttle({ default: { limit: 20, ttl: 60_000, generateKey: TRACK_BUCKET } })
   @Get('track/:id')
   async track(@Param('id') id: string, @Query('email') email: string) {
     const numeric = parseInt(id, 10);

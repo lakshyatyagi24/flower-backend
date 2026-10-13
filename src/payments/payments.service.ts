@@ -12,6 +12,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { RAZORPAY_CLIENT, RazorpayClient } from './razorpay.client';
+import { canAccessOrder } from '../orders/order-access';
 
 import { envTrim } from './config';
 
@@ -42,12 +43,7 @@ export class PaymentsService {
   async createRazorpayOrder(orderId: number, userId: number | null, email: string | null) {
     const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: this.include });
     // Unknown and not-yours look identical so sequential ids can't be enumerated.
-    const guestEmail = email?.trim().toLowerCase();
-    const owns = order
-      ? userId
-        ? order.userId === userId
-        : !!guestEmail && !!order.customerEmail && order.customerEmail.trim().toLowerCase() === guestEmail
-      : false;
+    const owns = canAccessOrder(order, { userId, email });
     if (!order || !owns) throw new ForbiddenException('Not your order');
 
     if (order.paymentStatus !== 'UNPAID' && order.paymentStatus !== 'FAILED') {

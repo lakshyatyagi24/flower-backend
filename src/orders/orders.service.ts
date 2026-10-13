@@ -13,6 +13,7 @@ import { joinRefundNote, splitRefundNote } from './refund-note';
 import { SETTING_DEFAULTS } from '../settings/setting-defaults';
 import { DeliveryService } from '../delivery/delivery.service';
 import { istNow, toStoredDate } from '../delivery/delivery-date';
+import { canAccessOrder } from './order-access';
 
 interface OrderItemInput {
   productId: number;
@@ -266,12 +267,7 @@ export class OrdersService {
    */
   async switchToCod(orderId: number, userId: number | null, email: string | null) {
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
-    const guestEmail = email?.trim().toLowerCase();
-    const owns = order
-      ? userId
-        ? order.userId === userId
-        : !!guestEmail && !!order.customerEmail && order.customerEmail.trim().toLowerCase() === guestEmail
-      : false;
+    const owns = canAccessOrder(order, { userId, email });
     if (!order || !owns) throw new ForbiddenException('Not your order');
 
     // The CAS is bound to the razorpayOrderId and refundNote values we READ, so the marker we append
@@ -332,6 +328,8 @@ export class OrdersService {
     return this.forCustomer(order);
   }
 
+  // Public tracking is email-based BY DESIGN (it is how guests and account holders look an order up with just
+  // id + email), so it intentionally does not use canAccessOrder. It returns a stripped view and one generic 404.
   async track(id: number, email: string) {
     const order = await this.prisma.order.findUnique({ where: { id }, include: this.include });
     // Single generic error for both "no such order" and "email mismatch" so
