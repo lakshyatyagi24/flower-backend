@@ -107,14 +107,8 @@ async function main() {
     await prisma.category.upsert({
       where: { slug: c.slug },
       create: c,
-      update: {
-        name: c.name,
-        // description intentionally NOT updated: admin edits survive re-seeding (see data/seed-taxonomy.js).
-        productType: c.productType,
-        defaultSaleMode: c.defaultSaleMode,
-        defaultGstRate: c.defaultGstRate,
-        sortOrder: c.sortOrder,
-      },
+      // Existing categories are never overwritten (admin edits survive re-seeding).
+      update: {},
     });
   }
   console.log(`Seeded ${categorySeed.length} non-cut-flower categories`);

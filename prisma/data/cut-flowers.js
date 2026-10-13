@@ -15,8 +15,9 @@
 //     -A "Mozilla/5.0" -o prisma/data/theflora-snapshot.json
 //
 // `seedCutFlowers(prisma)` is idempotent: existing rows (matched by slug)
-// have merchandising fields refreshed but their stock count is preserved so
-// it does not overwrite an admin's manual count.
+// are NEVER overwritten (name, description, price, featured, category, sale
+// mode, GST, unit, stock all belong to the admin once a row exists). The only
+// thing back-filled on an existing row is an image, and only when it has none.
 
 const path = require('path');
 
@@ -272,15 +273,8 @@ async function seedCutFlowers(prisma) {
   await prisma.category.upsert({
     where: { slug: cutFlowerCategory.slug },
     create: cutFlowerCategory,
-    update: {
-      name: cutFlowerCategory.name,
-      // image intentionally NOT updated — preserve any Cloudinary image set later.
-      // description intentionally NOT updated: admin edits survive re-seeding.
-      productType: cutFlowerCategory.productType,
-      defaultSaleMode: cutFlowerCategory.defaultSaleMode,
-      defaultGstRate: cutFlowerCategory.defaultGstRate,
-      sortOrder: cutFlowerCategory.sortOrder,
-    },
+    // Existing categories are never touched (admin edits to name/order/etc. survive re-seeding).
+    update: {},
   });
   const category = await prisma.category.findUnique({ where: { slug: cutFlowerCategory.slug } });
 
@@ -309,20 +303,8 @@ async function seedCutFlowers(prisma) {
     await prisma.product.upsert({
       where: { slug: p.slug },
       create: data,
-      update: {
-        name: data.name,
-        description: data.description,
-        price: data.price,
-        featured: data.featured,
-        // image only written when we have one AND the row has none (never clobber a live image).
-        ...(keepImage || !data.image ? {} : { image: data.image }),
-        categoryId: data.categoryId,
-        productType: data.productType,
-        saleMode: data.saleMode,
-        gstRate: data.gstRate,
-        unit: data.unit,
-        // intentionally NOT updating stock or minOrderQty — preserve admin overrides.
-      },
+      // Existing products are never overwritten. Only back-fill a missing image.
+      update: keepImage || !data.image ? {} : { image: data.image },
     });
   }
   return { category, count: cutFlowerProducts.length };
