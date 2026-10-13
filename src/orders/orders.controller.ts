@@ -79,6 +79,7 @@ export class OrdersController {
     @Query('paymentStatus') paymentStatus?: string,
     @Query('paymentMethod') paymentMethod?: string,
     @Query('attention') attention?: string,
+    @Query('sort') sort?: string,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
   ) {
@@ -87,6 +88,7 @@ export class OrdersController {
       paymentStatus: typeof paymentStatus === 'string' ? paymentStatus : undefined,
       paymentMethod: typeof paymentMethod === 'string' ? paymentMethod : undefined,
       attention: typeof attention === 'string' ? attention : undefined,
+      sort: typeof sort === 'string' ? sort : undefined,
       take: take ? parseInt(take, 10) : undefined,
       skip: skip ? parseInt(skip, 10) : undefined,
     });

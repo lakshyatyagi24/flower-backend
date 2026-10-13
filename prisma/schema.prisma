@@ -109,6 +109,9 @@ model Order {
   city            String?
   postalCode      String?
   notes           String?
+  // Customer-chosen delivery date: UTC midnight of the IST (Asia/Kolkata) calendar date, e.g. 2026-10-14 is
+  // stored as 2026-10-14T00:00:00.000Z. Nullable: orders placed before this column existed have none.
+  deliveryDate    DateTime?
   // Fulfillment tracking — visible to admins, surfaced to customers via the tracking page.
   trackingNumber  String?
   courierName     String?

@@ -1,8 +1,24 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { isIndianPin } from '../common/validators';
 import { SETTING_DEFAULTS } from '../settings/setting-defaults';
 import { parsePincodeRules, type ParsedPincodeRules } from './pincode-rules';
+import {
+  computeEarliest,
+  computeOptions,
+  formatDeliveryDate,
+  isIsoDate,
+  parseBlackoutDates,
+  parseCutoff,
+  parseDaysAhead,
+  parseLeadTimeDays,
+  type DeliveryConfig,
+  type DeliveryOptions,
+} from './delivery-date';
+
+export type { DeliveryOptions } from './delivery-date';
+
+const DATE_KEYS = ['delivery.cutoffTime', 'delivery.leadTimeDays', 'delivery.blackoutDates', 'delivery.daysAhead'] as const;
 
 export { parsePincodeRules } from './pincode-rules';
 export type { ParsedPincodeRules } from './pincode-rules';
@@ -45,5 +61,47 @@ export class DeliveryService {
    */
   async isServiceable(pin: string): Promise<boolean> {
     return (await this.check(pin)).serviceable;
+  }
+
+  /** Delivery-date rules from settings. Missing/bad values fall back to defaults (never throws on bad data). */
+  private async loadDateConfig(): Promise<DeliveryConfig> {
+    const rows = await this.prisma.setting.findMany({ where: { key: { in: [...DATE_KEYS] } } });
+    const get = (key: (typeof DATE_KEYS)[number]) => {
+      const row = rows.find((r) => r.key === key);
+      return row ? row.value : SETTING_DEFAULTS[key];
+    };
+    return {
+      cutoffMinutes: parseCutoff(get('delivery.cutoffTime')).minutes,
+      leadTimeDays: parseLeadTimeDays(get('delivery.leadTimeDays')),
+      daysAhead: parseDaysAhead(get('delivery.daysAhead')),
+      blackout: parseBlackoutDates(get('delivery.blackoutDates')),
+    };
+  }
+
+  /** Earliest deliverable date as `YYYY-MM-DD` (an IST calendar date). */
+  async earliestDeliveryDate(now: Date = new Date()): Promise<string> {
+    return computeEarliest(now, await this.loadDateConfig());
+  }
+
+  async deliveryOptions(now: Date = new Date()): Promise<DeliveryOptions> {
+    return computeOptions(now, await this.loadDateConfig());
+  }
+
+  /**
+   * Throws a 400 with an honest message unless `date` is a real `YYYY-MM-DD` inside
+   * [earliest, latest] and not a blackout date. Resolves to the accepted date.
+   */
+  async validateDeliveryDate(date: string, now: Date = new Date()): Promise<string> {
+    const cfg = await this.loadDateConfig();
+    const { earliest, latest } = computeOptions(now, cfg);
+    if (!isIsoDate(date) || date < earliest || date > latest) {
+      throw new BadRequestException(
+        `Please choose a delivery date between ${formatDeliveryDate(earliest)} and ${formatDeliveryDate(latest)}`,
+      );
+    }
+    if (cfg.blackout.includes(date)) {
+      throw new BadRequestException("We can't deliver on that date. Please choose another day.");
+    }
+    return date;
   }
 }

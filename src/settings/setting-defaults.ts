@@ -18,4 +18,11 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   'shipping.freeThreshold': '1499',
   // Comma/whitespace/newline separated 6-digit PINs and prefix patterns (e.g. "110001, 1100*"). Empty = unrestricted.
   'delivery.supportedPincodes': '',
+  // Delivery dates (all in India time). Orders placed at/after the cut-off start counting from the next day.
+  'delivery.cutoffTime': '15:00',
+  'delivery.leadTimeDays': '0',
+  // Comma/space/newline separated YYYY-MM-DD dates we cannot deliver on.
+  'delivery.blackoutDates': '',
+  // How many days after the earliest date a customer may choose.
+  'delivery.daysAhead': '14',
 };

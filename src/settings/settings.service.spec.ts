@@ -64,3 +64,49 @@ describe('SettingsService.upsert delivery.supportedPincodes validation', () => {
     expect(upsert).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('SettingsService.upsert delivery date settings validation', () => {
+  const makeWrite = () => {
+    const upsert = jest.fn((args: any) => args);
+    const prisma: any = {
+      setting: { upsert, findMany: jest.fn(async () => []) },
+      $transaction: jest.fn(async (ops: any[]) => ops),
+    };
+    return { svc: new SettingsService(prisma), upsert };
+  };
+
+  it('has defaults for all four keys', async () => {
+    const pub = await make().getPublic();
+    expect(pub['delivery.cutoffTime']).toBe('15:00');
+    expect(pub['delivery.leadTimeDays']).toBe('0');
+    expect(pub['delivery.blackoutDates']).toBe('');
+    expect(pub['delivery.daysAhead']).toBe('14');
+  });
+
+  it('accepts valid values and blanks', async () => {
+    const { svc, upsert } = makeWrite();
+    await svc.upsert({
+      'delivery.cutoffTime': '09:30', 'delivery.leadTimeDays': '2',
+      'delivery.blackoutDates': '2026-10-31, 2026-11-01\n2026-11-02', 'delivery.daysAhead': '30',
+    });
+    await svc.upsert({
+      'delivery.cutoffTime': '', 'delivery.leadTimeDays': '', 'delivery.blackoutDates': '', 'delivery.daysAhead': '',
+    });
+    expect(upsert).toHaveBeenCalledTimes(8);
+  });
+
+  it.each([
+    [{ 'delivery.cutoffTime': '3pm' }, /"3pm".*HH:MM/],
+    [{ 'delivery.cutoffTime': '24:00' }, /"24:00"/],
+    [{ 'delivery.leadTimeDays': '31' }, /"31".*0 to 30/],
+    [{ 'delivery.leadTimeDays': '1.5' }, /"1.5"/],
+    [{ 'delivery.daysAhead': '0' }, /"0".*1 to 90/],
+    [{ 'delivery.daysAhead': '91' }, /"91"/],
+    [{ 'delivery.blackoutDates': '2026-10-31, tomorrow, 2026-02-30' }, /"tomorrow", "2026-02-30"/],
+  ])('rejects %j with a 400 naming the bad value and writes nothing', async (values, message) => {
+    const { svc, upsert } = makeWrite();
+    await expect(svc.upsert({ 'store.name': 'X', ...values })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.upsert(values)).rejects.toThrow(message);
+    expect(upsert).not.toHaveBeenCalled();
+  });
+});

@@ -2,6 +2,12 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SETTING_DEFAULTS } from './setting-defaults';
 import { findInvalidPincodeTokens } from '../delivery/pincode-rules';
+import {
+  findInvalidBlackoutTokens,
+  isValidCutoff,
+  isValidDaysAhead,
+  isValidLeadTimeDays,
+} from '../delivery/delivery-date';
 
 const DEFAULTS = SETTING_DEFAULTS;
 
@@ -60,6 +66,7 @@ export class SettingsService {
         `Serviceable PIN codes has invalid entries: ${shown}${badPins.length > 5 ? ' and more' : ''}. Use 6-digit PINs (110001) or prefixes ending in * (1100*), separated by commas, spaces or new lines.`,
       );
     }
+    this.validateDeliveryDateSettings(values);
     const updates = Object.entries(values);
     await this.prisma.$transaction(
       updates.map(([key, value]) =>
@@ -71,5 +78,28 @@ export class SettingsService {
       ),
     );
     return this.getAll();
+  }
+
+  /** Reject malformed delivery-date settings (a blank value is allowed and means "use the default"). */
+  private validateDeliveryDateSettings(values: Record<string, string>) {
+    const cutoff = values['delivery.cutoffTime'];
+    if (cutoff !== undefined && cutoff.trim() !== '' && !isValidCutoff(cutoff)) {
+      throw new BadRequestException(`Order cut-off time "${cutoff.slice(0, 20)}" is not valid. Use 24-hour HH:MM, e.g. 15:00.`);
+    }
+    const lead = values['delivery.leadTimeDays'];
+    if (lead !== undefined && lead.trim() !== '' && !isValidLeadTimeDays(lead)) {
+      throw new BadRequestException(`Lead time "${lead.slice(0, 20)}" is not valid. Use a whole number of days from 0 to 30.`);
+    }
+    const ahead = values['delivery.daysAhead'];
+    if (ahead !== undefined && ahead.trim() !== '' && !isValidDaysAhead(ahead)) {
+      throw new BadRequestException(`Booking window "${ahead.slice(0, 20)}" is not valid. Use a whole number of days from 1 to 90.`);
+    }
+    const badDates = findInvalidBlackoutTokens(values['delivery.blackoutDates']);
+    if (badDates.length > 0) {
+      const shown = badDates.slice(0, 5).map((t) => `"${t.slice(0, 20)}"`).join(', ');
+      throw new BadRequestException(
+        `Unavailable dates has invalid entries: ${shown}${badDates.length > 5 ? ' and more' : ''}. Use YYYY-MM-DD (2026-10-31), separated by commas, spaces or new lines.`,
+      );
+    }
   }
 }

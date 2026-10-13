@@ -41,3 +41,11 @@ describe('DeliveryController.check', () => {
     expect(svc.check).not.toHaveBeenCalled();
   });
 });
+
+describe('DeliveryController.options', () => {
+  it('returns the service options', async () => {
+    const opts = { earliest: '2026-10-14', latest: '2026-10-28', blackoutDates: ['2026-10-20'] };
+    const svc: any = { deliveryOptions: jest.fn(async () => opts) };
+    expect(await new DeliveryController(svc).options()).toEqual(opts);
+  });
+});

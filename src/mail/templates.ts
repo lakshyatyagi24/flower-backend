@@ -1,7 +1,11 @@
+import { formatDeliveryDate } from '../delivery/delivery-date';
+
 type OrderLike = {
   id: number; total: number; subtotal: number; shipping: number; gst: number; paymentMethod: string;
   customerName: string | null; shippingAddress: string | null; city: string | null; postalCode: string | null;
   trackingNumber?: string | null; courierName?: string | null;
+  /** UTC midnight of the chosen IST date (null for orders placed before delivery dates existed). */
+  deliveryDate?: Date | string | null;
   items: { productName: string; quantity: number; unitPrice: number }[];
 };
 
@@ -24,6 +28,11 @@ function layout(title: string, body: string, siteUrl: string): string {
 </div></body></html>`;
 }
 
+function deliveryLine(o: OrderLike): string {
+  const d = formatDeliveryDate(o.deliveryDate);
+  return d ? `<p style="font-size:14px">Delivery date: <strong>${esc(d)}</strong></p>` : '';
+}
+
 function itemsTable(o: OrderLike): string {
   const rows = o.items.map((i) => `<tr><td style="padding:6px 0">${esc(i.productName)} × ${i.quantity}</td><td align="right">${formatInr(i.unitPrice * i.quantity)}</td></tr>`).join('');
   return `<table width="100%" style="border-collapse:collapse;font-size:14px">${rows}
@@ -38,24 +47,25 @@ export function orderPlacedHtml(o: OrderLike, siteUrl: string): string {
   return layout(`Order #${o.id} received`, `
 <p>Hi ${esc(o.customerName)}, thank you. We are preparing your flowers.</p>
 ${itemsTable(o)}
+${deliveryLine(o)}
 <p style="font-size:14px">${pay}<br>Deliver to: ${esc(o.shippingAddress)}, ${esc(o.city)} ${esc(o.postalCode)}</p>
 <p><a href="${siteUrl}/track-order" style="display:inline-block;padding:12px 20px;background:#1C1B19;color:#fff;text-decoration:none">Track your order</a></p>`, siteUrl);
 }
 
 export function orderPaidHtml(o: OrderLike, siteUrl: string): string {
-  return layout(`Payment received for order #${o.id}`, `<p>Hi ${esc(o.customerName)}, your payment of ${formatInr(o.total)} is confirmed.</p>${itemsTable(o)}
+  return layout(`Payment received for order #${o.id}`, `<p>Hi ${esc(o.customerName)}, your payment of ${formatInr(o.total)} is confirmed.</p>${deliveryLine(o)}${itemsTable(o)}
 <p><a href="${siteUrl}/track-order">Track your order</a></p>`, siteUrl);
 }
 
 export function orderShippedHtml(o: OrderLike, siteUrl: string): string {
   const t = o.trackingNumber ? `<p>Courier: ${esc(o.courierName)} · Tracking: ${esc(o.trackingNumber)}</p>` : '';
-  return layout(`Order #${o.id} is on its way`, `<p>Hi ${esc(o.customerName)}, your flowers have left our studio.</p>${t}
+  return layout(`Order #${o.id} is on its way`, `<p>Hi ${esc(o.customerName)}, your flowers have left our studio.</p>${deliveryLine(o)}${t}
 <p><a href="${siteUrl}/track-order">Track your order</a></p>`, siteUrl);
 }
 
 export function adminOrderHtml(o: OrderLike, adminUrl: string): string {
   return layout(`New order #${o.id} — ${formatInr(o.total)} (${o.paymentMethod})`, `
-<p>${esc(o.customerName)} · ${esc(o.city)} ${esc(o.postalCode)}</p>${itemsTable(o)}
+<p>${esc(o.customerName)} · ${esc(o.city)} ${esc(o.postalCode)}</p>${deliveryLine(o)}${itemsTable(o)}
 <p><a href="${adminUrl}/orders">Open in admin</a></p>`, adminUrl);
 }
 

@@ -1,7 +1,10 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 
-const allowAll: any = { isServiceable: jest.fn(async () => true) };
+const allowAll: any = {
+  isServiceable: jest.fn(async () => true),
+  validateDeliveryDate: jest.fn(async (d: string) => d),
+};
 
 function makeFakes(existingStatus = 'PAID') {
   const order = {
@@ -39,6 +42,7 @@ function makeFakes(existingStatus = 'PAID') {
 const input = {
   items: [{ productId: 1, quantity: 1 }], customerName: 'C', customerEmail: 'c@x.com',
   customerPhone: '9876543210', shippingAddress: '1 Road', city: 'Delhi', postalCode: '110001',
+  deliveryDate: '2026-10-14',
 };
 
 describe('OrdersService mail hooks', () => {
@@ -75,6 +79,47 @@ describe('OrdersService mail hooks', () => {
     expect(prisma.product.findMany).not.toHaveBeenCalled();
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(mail.sendOrderPlaced).not.toHaveBeenCalled();
+  });
+
+  it('create stores the delivery date as UTC midnight of the chosen IST date', async () => {
+    const { svc, prisma } = makeFakes();
+    const tx: any = {
+      product: { updateMany: jest.fn(async () => ({ count: 1 })) },
+      order: { create: jest.fn(async ({ data }: any) => ({ id: 9, ...data, items: [] })) },
+    };
+    prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+    const created: any = await svc.create(null, input);
+    expect(tx.order.create.mock.calls[0][0].data.deliveryDate.toISOString()).toBe('2026-10-14T00:00:00.000Z');
+    expect(created.deliveryDate.toISOString()).toBe('2026-10-14T00:00:00.000Z');
+  });
+
+  it('create rejects an invalid delivery date before any product read, stock claim or mail', async () => {
+    const { prisma, mail } = makeFakes();
+    const delivery: any = {
+      isServiceable: jest.fn(async () => true),
+      validateDeliveryDate: jest.fn(async () => {
+        throw new BadRequestException("We can't deliver on that date. Please choose another day.");
+      }),
+    };
+    const strict = new OrdersService(prisma, mail, delivery);
+    await expect(strict.create(null, input)).rejects.toThrow("We can't deliver on that date");
+    expect(delivery.validateDeliveryDate).toHaveBeenCalledWith('2026-10-14');
+    expect(prisma.product.findMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(mail.sendOrderPlaced).not.toHaveBeenCalled();
+  });
+
+  it('listAll sorts by delivery date (nulls last, newest created first as tie-break) on request', async () => {
+    const { svc, prisma } = makeFakes();
+    prisma.order.findMany = jest.fn(async () => []);
+    prisma.order.count = jest.fn(async () => 0);
+    await svc.listAll({ sort: 'deliveryDate' });
+    expect(prisma.order.findMany.mock.calls[0][0].orderBy).toEqual([
+      { deliveryDate: { sort: 'asc', nulls: 'last' } },
+      { createdAt: 'desc' },
+    ]);
+    await svc.listAll({ sort: 'bogus' });
+    expect(prisma.order.findMany.mock.calls[1][0].orderBy).toEqual({ createdAt: 'desc' });
   });
 
   it('create still sends order-placed for an explicit COD order', async () => {

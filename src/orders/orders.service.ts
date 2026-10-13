@@ -12,6 +12,7 @@ import { isOnlinePaymentsEnabled } from '../payments/config';
 import { joinRefundNote, splitRefundNote } from './refund-note';
 import { SETTING_DEFAULTS } from '../settings/setting-defaults';
 import { DeliveryService } from '../delivery/delivery.service';
+import { toStoredDate } from '../delivery/delivery-date';
 
 interface OrderItemInput {
   productId: number;
@@ -28,6 +29,8 @@ interface CreateOrderInput {
   postalCode: string;
   notes?: string;
   paymentMethod?: string;
+  /** `YYYY-MM-DD` (IST calendar date). Stored as UTC midnight of that date. */
+  deliveryDate: string;
 }
 
 const ALLOWED_STATUSES = ['PENDING', 'PAID', 'SHIPPED', 'COMPLETED', 'CANCELLED'] as const;
@@ -117,6 +120,9 @@ export class OrdersService {
     if (!(await this.delivery.isServiceable((input.postalCode ?? '').trim()))) {
       throw new BadRequestException('We do not deliver to this PIN code yet');
     }
+
+    // Delivery-date gate (cut-off, lead time, window, blackout dates): also before any product/stock work.
+    const deliveryDate = await this.delivery.validateDeliveryDate(input.deliveryDate);
 
     const productIds = input.items.map((i) => i.productId);
     type ProductRow = {
@@ -218,6 +224,7 @@ export class OrdersService {
           city: input.city?.trim() || null,
           postalCode: input.postalCode?.trim() || null,
           notes: input.notes?.trim() || null,
+          deliveryDate: toStoredDate(deliveryDate),
           items: { create: itemRows },
         },
         include: this.include,
@@ -333,7 +340,7 @@ export class OrdersService {
     return publicOrder;
   }
 
-  async listAll(params: { status?: string; paymentStatus?: string; paymentMethod?: string; attention?: string; take?: number; skip?: number }) {
+  async listAll(params: { status?: string; paymentStatus?: string; paymentMethod?: string; attention?: string; sort?: string; take?: number; skip?: number }) {
     const where: Record<string, unknown> = {};
     if (params.status && (ALLOWED_STATUSES as readonly string[]).includes(params.status)) {
       where.status = params.status;
@@ -353,7 +360,7 @@ export class OrdersService {
       this.prisma.order.findMany({
         where,
         include: this.include,
-        orderBy: { createdAt: 'desc' },
+        orderBy: params.sort === 'deliveryDate' ? [{ deliveryDate: { sort: 'asc', nulls: 'last' } }, { createdAt: 'desc' }] : { createdAt: 'desc' },
         take,
         skip,
       }),

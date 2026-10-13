@@ -6,6 +6,7 @@ import { applyBodyParsers } from '../src/common/body-parsers';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { MailService } from '../src/mail/mail.service';
+import { DeliveryService } from '../src/delivery/delivery.service';
 import { PaymentsService } from '../src/payments/payments.service';
 import { RAZORPAY_CLIENT } from '../src/payments/razorpay.client';
 import { signJwt } from '../src/auth/jwt.util';
@@ -33,9 +34,11 @@ describe('Phase 2 final fixes (e2e)', () => {
   const http = () => request(app.getHttpServer());
   const userAuth = () => `Bearer ${signJwt({ sub: userId, email, role: 'CUSTOMER' })}`;
   const adminAuth = () => `Bearer ${signJwt({ sub: 999999, email: 'admin@example.com', role: 'ADMIN' })}`;
+  let deliveryDate = '';
   const orderBody = (paymentMethod: string) => ({
     items: [{ productId, quantity: 1 }], customerName: 'FF', customerEmail: email, customerPhone: '9354016059',
     shippingAddress: '1 Test Road', city: 'Delhi', postalCode: '110001', paymentMethod,
+    deliveryDate,
   });
 
   beforeAll(async () => {
@@ -48,6 +51,7 @@ describe('Phase 2 final fixes (e2e)', () => {
     applyBodyParsers(app);
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     await app.init();
+    deliveryDate = await app.get(DeliveryService).earliestDeliveryDate();
     prisma = app.get(PrismaService);
     userId = (await prisma.user.create({ data: { email, password: 'x', name: 'FF' } })).id;
     productId = (await prisma.product.create({

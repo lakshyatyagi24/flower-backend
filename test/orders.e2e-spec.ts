@@ -3,6 +3,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { DeliveryService } from '../src/delivery/delivery.service';
 
 describe('Orders validation (e2e)', () => {
   let app: INestApplication;
@@ -47,6 +48,7 @@ describe('Orders validation (e2e)', () => {
         items: [{ productId: product.id, quantity: 1 }],
         customerName: 'E2E', customerEmail: 'e2e-task12@example.com', customerPhone: '+91 93540 16059',
         shippingAddress: '1 Test Road', city: 'Delhi', postalCode: '110001', paymentMethod: 'COD',
+        deliveryDate: await app.get(DeliveryService).earliestDeliveryDate(),
       });
       expect(res.status).toBe(201);
       orderId = res.body.id;

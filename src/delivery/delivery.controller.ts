@@ -1,7 +1,7 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { isIndianPin } from '../common/validators';
-import { DeliveryService } from './delivery.service';
+import { DeliveryService, type DeliveryOptions } from './delivery.service';
 
 @Controller('delivery')
 export class DeliveryController {
@@ -26,5 +26,12 @@ export class DeliveryController {
       restricted: true,
       message: serviceable ? 'We deliver to this PIN code.' : 'We do not deliver to this PIN code yet.',
     };
+  }
+
+  /** Selectable delivery window for checkout (IST dates, `YYYY-MM-DD`). */
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('options')
+  async options(): Promise<DeliveryOptions> {
+    return this.delivery.deliveryOptions();
   }
 }

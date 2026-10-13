@@ -1,4 +1,4 @@
-import { orderPlacedHtml, formatInr, adminOrderHtml, adminEnquiryHtml, enquiryReceivedHtml } from './templates';
+import { orderPlacedHtml, orderPaidHtml, orderShippedHtml, formatInr, adminOrderHtml, adminEnquiryHtml, enquiryReceivedHtml } from './templates';
 
 describe('mail templates', () => {
   it('formats INR', () => {
@@ -32,5 +32,24 @@ describe('mail templates', () => {
       expect(html).not.toContain('<script>');
       expect(html).toContain('&lt;script&gt;');
     }
+  });
+});
+
+describe('delivery date in order mails', () => {
+  const order = {
+    id: 7, total: 100, subtotal: 100, shipping: 0, gst: 0, paymentMethod: 'COD', customerName: 'A',
+    shippingAddress: 'x', city: 'Delhi', postalCode: '110001', items: [],
+    deliveryDate: new Date('2026-10-14T00:00:00.000Z'),
+  } as any;
+  it('is shown in placed, paid, shipped and admin mails as a long date', () => {
+    for (const html of [
+      orderPlacedHtml(order, 'https://s.test'), orderPaidHtml(order, 'https://s.test'),
+      orderShippedHtml(order, 'https://s.test'), adminOrderHtml(order, 'https://a.test'),
+    ]) {
+      expect(html).toContain('Wednesday, 14 October 2026');
+    }
+  });
+  it('is omitted for older orders without one', () => {
+    expect(orderPlacedHtml({ ...order, deliveryDate: null }, 'https://s.test')).not.toContain('Delivery date');
   });
 });
