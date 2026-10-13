@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SETTING_DEFAULTS } from './setting-defaults';
+import { findInvalidPincodeTokens } from '../delivery/pincode-rules';
 
 const DEFAULTS = SETTING_DEFAULTS;
 
@@ -51,6 +52,13 @@ export class SettingsService {
       if (!k || k.length > 128) throw new BadRequestException(`Invalid setting key "${k.slice(0, 40)}"`);
       if (typeof v !== 'string') throw new BadRequestException(`Setting "${k}" must be a string`);
       if (v.length > 20000) throw new BadRequestException(`Setting "${k}" is too long`);
+    }
+    const badPins = findInvalidPincodeTokens(values['delivery.supportedPincodes']);
+    if (badPins.length > 0) {
+      const shown = badPins.slice(0, 5).map((t) => `"${t.slice(0, 20)}"`).join(', ');
+      throw new BadRequestException(
+        `Serviceable PIN codes has invalid entries: ${shown}${badPins.length > 5 ? ' and more' : ''}. Use 6-digit PINs (110001) or prefixes ending in * (1100*), separated by commas, spaces or new lines.`,
+      );
     }
     const updates = Object.entries(values);
     await this.prisma.$transaction(

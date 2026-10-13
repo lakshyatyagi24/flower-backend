@@ -1,4 +1,5 @@
 import { DeliveryService, parsePincodeRules } from './delivery.service';
+import { findInvalidPincodeTokens } from './pincode-rules';
 
 function make(value: string | null | undefined) {
   const prisma: any = {
@@ -54,5 +55,33 @@ describe('DeliveryService.isServiceable', () => {
       expect(await s.isServiceable(bad)).toBe(false);
     }
     expect(await s.isServiceable(undefined as any)).toBe(false);
+  });
+});
+
+describe('zero-width characters and invalid-token detection', () => {
+  it('strips zero-width chars before splitting', async () => {
+    const s = make('\u200B110001\uFEFF,\u200D1100*');
+    expect(await s.isServiceable('110001')).toBe(true);
+    expect(await s.isServiceable('110099')).toBe(true);
+    expect(await s.isServiceable('400001')).toBe(false);
+  });
+  it('findInvalidPincodeTokens lists bad tokens only', () => {
+    expect(findInvalidPincodeTokens('110001, 1100*, TBD, 12345, *, 1234567*\n560\u200B001')).toEqual([
+      'TBD', '12345', '*', '1234567*',
+    ]);
+    expect(findInvalidPincodeTokens('')).toEqual([]);
+    expect(findInvalidPincodeTokens(undefined)).toEqual([]);
+  });
+});
+
+describe('DeliveryService.check restricted flag', () => {
+  it('is unrestricted for empty, missing and all-invalid lists', async () => {
+    expect(await make('').check('560001')).toEqual({ serviceable: true, restricted: false });
+    expect(await make(undefined).check('560001')).toEqual({ serviceable: true, restricted: false });
+    expect(await make('TBD').check('560001')).toEqual({ serviceable: true, restricted: false });
+  });
+  it('is restricted when a valid entry exists', async () => {
+    expect(await make('110001').check('110001')).toEqual({ serviceable: true, restricted: true });
+    expect(await make('110001').check('560001')).toEqual({ serviceable: false, restricted: true });
   });
 });

@@ -2,27 +2,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { isIndianPin } from '../common/validators';
 import { SETTING_DEFAULTS } from '../settings/setting-defaults';
+import { parsePincodeRules, type ParsedPincodeRules } from './pincode-rules';
 
-const EXACT = /^[1-9]\d{5}$/;
-// Prefix pattern: 1-5 leading digits followed by '*', e.g. "1100*".
-const PREFIX = /^[1-9]\d{0,4}\*$/;
+export { parsePincodeRules } from './pincode-rules';
+export type { ParsedPincodeRules } from './pincode-rules';
 
-export interface ParsedPincodeRules {
-  exact: Set<string>;
-  prefixes: string[];
-}
-
-/** Parse the `delivery.supportedPincodes` setting. Separators: commas, whitespace, newlines, semicolons. */
-export function parsePincodeRules(raw: string | null | undefined): ParsedPincodeRules {
-  const exact = new Set<string>();
-  const prefixes: string[] = [];
-  for (const token of (raw ?? '').split(/[\s,;]+/)) {
-    if (!token) continue;
-    if (EXACT.test(token)) exact.add(token);
-    else if (PREFIX.test(token)) prefixes.push(token.slice(0, -1));
-    // anything else (placeholder text, typos) is ignored
-  }
-  return { exact, prefixes };
+export interface ServiceabilityResult {
+  serviceable: boolean;
+  /** True only when a (valid) PIN list is configured. When false, nothing is restricted. */
+  restricted: boolean;
 }
 
 @Injectable()
@@ -42,14 +30,20 @@ export class DeliveryService {
     return rules;
   }
 
+  /** Serviceability plus whether any restriction is configured (so callers can word the answer honestly). */
+  async check(pin: string): Promise<ServiceabilityResult> {
+    const { exact, prefixes } = await this.loadRules();
+    const restricted = exact.size > 0 || prefixes.length > 0;
+    if (typeof pin !== 'string' || !isIndianPin(pin)) return { serviceable: false, restricted };
+    if (!restricted) return { serviceable: true, restricted };
+    return { serviceable: exact.has(pin) || prefixes.some((p) => pin.startsWith(p)), restricted };
+  }
+
   /**
    * True when no restriction is configured (empty/missing/unparseable list), or the PIN matches an exact entry
    * or a prefix pattern. A malformed PIN is never serviceable.
    */
   async isServiceable(pin: string): Promise<boolean> {
-    if (typeof pin !== 'string' || !isIndianPin(pin)) return false;
-    const { exact, prefixes } = await this.loadRules();
-    if (exact.size === 0 && prefixes.length === 0) return true;
-    return exact.has(pin) || prefixes.some((p) => pin.startsWith(p));
+    return (await this.check(pin)).serviceable;
   }
 }

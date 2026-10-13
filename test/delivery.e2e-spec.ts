@@ -3,6 +3,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { SettingsService } from '../src/settings/settings.service';
 
 const KEY = 'delivery.supportedPincodes';
 
@@ -36,11 +37,26 @@ describe('Delivery serviceability (e2e)', () => {
     const http = app.getHttpServer();
     const ok = await request(http).get('/delivery/check').query({ pincode: '110045' });
     expect(ok.status).toBe(200);
-    expect(ok.body).toEqual({ serviceable: true, message: 'We deliver to this PIN code.' });
+    expect(ok.body).toEqual({ serviceable: true, restricted: true, message: 'We deliver to this PIN code.' });
     const no = await request(http).get('/delivery/check').query({ pincode: '400001' });
-    expect(no.body).toEqual({ serviceable: false, message: 'We do not deliver to this PIN code yet.' });
+    expect(no.body).toEqual({ serviceable: false, restricted: true, message: 'We do not deliver to this PIN code yet.' });
     const bad = await request(http).get('/delivery/check').query({ pincode: '12' });
     expect(bad.body.serviceable).toBe(false);
+  });
+
+  it('GET /delivery/check does not claim delivery when no list is configured', async () => {
+    await setList('');
+    const r = await request(app.getHttpServer()).get('/delivery/check').query({ pincode: '400001' });
+    expect(r.body).toEqual({
+      serviceable: true,
+      restricted: false,
+      message: "We'll confirm delivery to your PIN code at checkout.",
+    });
+  });
+
+  it('SettingsService.upsert rejects invalid PIN entries', async () => {
+    const settings = app.get(SettingsService);
+    await expect(settings.upsert({ [KEY]: '110001, nope' })).rejects.toThrow(/"nope"/);
   });
 
   it('POST /orders rejects an unserviceable PIN and leaves stock untouched, accepts a serviceable one', async () => {
