@@ -81,6 +81,57 @@ describe('OrdersService mail hooks', () => {
     expect(mail.sendOrderPlaced).not.toHaveBeenCalled();
   });
 
+  describe('create: stock and minimum order rules (clear errors, no silent changes)', () => {
+    const withProduct = (over: Record<string, unknown>) => {
+      const f = makeFakes();
+      f.prisma.product.findMany.mockResolvedValue([
+        { id: 1, name: 'Rose', price: 100, stock: 10, active: true, saleMode: 'PURCHASE', gstRate: 0, minOrderQty: 1, ...over },
+      ]);
+      return f;
+    };
+
+    it('rejects a quantity below the minimum order instead of silently raising it', async () => {
+      const { svc, prisma, mail } = withProduct({ minOrderQty: 5 });
+      await expect(svc.create(null, { ...input, items: [{ productId: 1, quantity: 2 }] })).rejects.toThrow(
+        '"Rose" has a minimum order of 5',
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(mail.sendOrderPlaced).not.toHaveBeenCalled();
+    });
+
+    it('accepts exactly the minimum and charges the database price', async () => {
+      const { svc, prisma } = withProduct({ minOrderQty: 5, price: 80 });
+      const tx: any = {
+        product: { updateMany: jest.fn(async () => ({ count: 1 })) },
+        order: { create: jest.fn(async ({ data }: any) => ({ id: 9, ...data, items: [] })) },
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      await svc.create(null, { ...input, items: [{ productId: 1, quantity: 5 }] });
+      const data = tx.order.create.mock.calls[0][0].data;
+      expect(data.subtotal).toBe(400);
+      expect(data.items.create[0]).toMatchObject({ quantity: 5, unitPrice: 80 });
+    });
+
+    it('says "out of stock" at zero and "Only N" when stock is lower than the quantity', async () => {
+      await expect(withProduct({ stock: 0 }).svc.create(null, input)).rejects.toThrow('"Rose" is out of stock');
+      await expect(
+        withProduct({ stock: 2 }).svc.create(null, { ...input, items: [{ productId: 1, quantity: 3 }] }),
+      ).rejects.toThrow('Only 2 of "Rose" available');
+    });
+
+    it('a lost stock race surfaces a recoverable message and creates nothing', async () => {
+      const { svc, prisma, mail } = makeFakes();
+      const tx: any = {
+        product: { updateMany: jest.fn(async () => ({ count: 0 })) },
+        order: { create: jest.fn() },
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      await expect(svc.create(null, input)).rejects.toThrow('just went out of stock');
+      expect(tx.order.create).not.toHaveBeenCalled();
+      expect(mail.sendOrderPlaced).not.toHaveBeenCalled();
+    });
+  });
+
   it('create stores the delivery date as UTC midnight of the chosen IST date', async () => {
     const { svc, prisma } = makeFakes();
     const tx: any = {

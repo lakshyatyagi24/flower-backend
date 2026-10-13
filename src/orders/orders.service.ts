@@ -151,7 +151,12 @@ export class OrdersService {
       if (product.saleMode === 'ENQUIRY') {
         throw new BadRequestException(`"${product.name}" is enquiry-only — please send an enquiry instead`);
       }
-      const qty = Math.max(product.minOrderQty || 1, Math.floor(it.quantity || 1));
+      const qty = Math.floor(it.quantity || 1);
+      // Never silently bump the quantity (and the amount charged): the shopper must see the minimum.
+      const minQty = product.minOrderQty || 1;
+      if (qty < minQty) {
+        throw new BadRequestException(`"${product.name}" has a minimum order of ${minQty}`);
+      }
       if (qty > product.stock) {
         throw new BadRequestException(
           product.stock <= 0

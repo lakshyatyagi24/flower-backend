@@ -19,13 +19,16 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
 import { SetPaymentMethodDto } from './dto/set-payment-method.dto';
 import { AdminUpdateOrderDto } from './dto/admin-update-order.dto';
+import { TrackOrderDto } from './dto/track-order.dto';
 
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly orders: OrdersService) {}
 
-  // Anyone (logged in or guest) can place an order
+  // Anyone (logged in or guest) can place an order. Tighter than the global limit: a guest can put any
+  // email on an order, so this also bounds confirmation-mail spam towards a third party.
   @UseGuards(OptionalJwtAuthGuard)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post()
   async create(@Body() body: CreateOrderDto, @Req() req: { user?: JwtPayload }) {
     return this.orders.create(req.user?.sub ?? null, body);
@@ -61,7 +64,19 @@ export class OrdersController {
     return this.orders.getMine(user.sub, numeric);
   }
 
-  // Public tracking by order id + email
+  // Public tracking by order id + email, email in the BODY (preferred: never reaches access logs).
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @HttpCode(200)
+  @Post('track/:id')
+  async trackPost(@Param('id') id: string, @Body() body: TrackOrderDto) {
+    const numeric = parseInt(id, 10);
+    if (isNaN(numeric)) throw new BadRequestException('Invalid order ID');
+    return this.orders.track(numeric, body.email);
+  }
+
+  // Legacy: email in the query string (ends up in access logs). Kept so older clients and links keep working;
+  // the storefront uses the POST variant above.
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Get('track/:id')
   async track(@Param('id') id: string, @Query('email') email: string) {
     const numeric = parseInt(id, 10);
