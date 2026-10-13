@@ -6,6 +6,7 @@ const path = require('path');
 const { scryptSync, randomBytes } = require('crypto');
 const { seedCutFlowers } = require('./data/cut-flowers');
 const { applyTaxonomy } = require('./data/seed-taxonomy');
+const { DEFAULT_SETTINGS } = require('./data/default-settings');
 
 function loadPrisma() {
   try {
@@ -144,19 +145,10 @@ async function main() {
     JSON.stringify(taxonomy.perTag),
   );
 
-  // Default store settings — placeholders, to be overwritten by the admin
-  // via the settings page once they share their real contact details.
-  const defaultSettings = {
-    'store.name': 'Fresh Petals India',
-    'store.email': 'orders@example.com',
-    'store.phone': '+91 93540 16059',
-    'store.whatsapp': '+91 93540 16059',
-    'store.address': 'Delhi NCR — please update with real address',
-    'store.instagram': '',
-    'store.gstin': '',
-    'shipping.flatRate': '99',
-    'shipping.freeThreshold': '1499',
-  };
+  // Default store settings. Contact email/address are deliberately BLANK on fresh DBs
+  // (no fake placeholders on public pages); the owner fills them in the admin Settings
+  // page. upsert with `update: {}` never overwrites values already in a live DB.
+  const defaultSettings = DEFAULT_SETTINGS;
   for (const [key, value] of Object.entries(defaultSettings)) {
     await prisma.setting.upsert({
       where: { key },

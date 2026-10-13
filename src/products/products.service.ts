@@ -39,6 +39,9 @@ interface ProductInput {
 const VALID_PRODUCT_TYPES: ProductTypeValue[] = ['CUT_FLOWER', 'PLANT', 'BOUQUET', 'ARRANGEMENT', 'HAMPER'];
 const VALID_SALE_MODES: SaleModeValue[] = ['PURCHASE', 'ENQUIRY'];
 
+/** Listing bounds: take is capped (admin screens request up to 200); page is capped so skip stays a small int. */
+export const MAX_TAKE = 200;
+export const MAX_PAGE = 100000;
 const TAG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const TAG_MAX_LEN = 40;
 const TAG_MAX_COUNT = 20;
@@ -205,10 +208,16 @@ export class ProductsService {
         { description: { contains: q, mode: 'insensitive' } },
       ];
     }
-    const take = Math.min(Math.max(params.take ?? 50, 1), 200);
-    const pageGiven = typeof params.page === 'number' && Number.isInteger(params.page) && params.page >= 1;
-    const skip = pageGiven ? (params.page as number - 1) * take : Math.max(params.skip ?? 0, 0);
-    const page = pageGiven ? (params.page as number) : Math.floor(skip / take) + 1;
+    const takeIn = Number.isFinite(params.take) ? Math.trunc(params.take as number) : 50;
+    const take = Math.min(Math.max(takeIn, 1), MAX_TAKE);
+    const pageGiven =
+      typeof params.page === 'number' && Number.isInteger(params.page) && params.page >= 1;
+    const skipIn = Number.isFinite(params.skip) ? Math.trunc(params.skip as number) : 0;
+    // Bounded so a hostile ?page=1e20 / ?skip=1e20 can never reach Prisma as an
+    // absurd offset (that would 500 on a public route).
+    const page = pageGiven ? Math.min(params.page as number, MAX_PAGE) : undefined;
+    const skip = page !== undefined ? (page - 1) * take : Math.min(Math.max(skipIn, 0), MAX_PAGE * MAX_TAKE);
+    const pageOut = page ?? Math.floor(skip / take) + 1;
     const orderBy = Object.prototype.hasOwnProperty.call(SORT_ORDERS, params.sort ?? '')
       ? SORT_ORDERS[params.sort as string]
       : SORT_ORDERS.newest;
@@ -227,7 +236,7 @@ export class ProductsService {
       image: normalizeImageUrl(item.image),
     }));
     const items = await this.attachRatings(sanitizedItems);
-    return { items, total, take, skip, page, pages: Math.max(1, Math.ceil(total / take)) };
+    return { items, total, take, skip, page: pageOut, pages: Math.max(1, Math.ceil(total / take)) };
   }
 
   async getBySlug(slug: string) {

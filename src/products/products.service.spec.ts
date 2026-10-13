@@ -108,6 +108,33 @@ describe('ProductsService.list query building', () => {
     expect((await makeService().svc.list({ take: 9999 })).take).toBe(200);
     expect((await makeService().svc.list({ take: 0 })).take).toBe(1);
   });
+  it('NaN / non-finite take falls back to the default 50', async () => {
+    expect((await makeService().svc.list({ take: NaN })).take).toBe(50);
+    expect((await makeService().svc.list({ take: Infinity })).take).toBe(50);
+  });
+  it('caps page so a huge ?page= cannot produce an absurd skip', async () => {
+    const { svc, findMany } = makeService();
+    const res = await svc.list({ page: 1e20, take: 10 });
+    expect(res.page).toBe(100000);
+    expect(findMany.mock.calls[0][0].skip).toBe(99999 * 10);
+  });
+  it('caps skip and ignores non-finite skip', async () => {
+    const { svc, findMany } = makeService();
+    await svc.list({ skip: 1e20, take: 200 });
+    expect(findMany.mock.calls[0][0].skip).toBe(100000 * 200);
+    await svc.list({ skip: NaN });
+    expect(findMany.mock.calls[1][0].skip).toBe(0);
+  });
+  it('page beyond the last returns an empty slice with the real page count', async () => {
+    const res = await makeService(5).svc.list({ page: 50, take: 10 });
+    expect(res.pages).toBe(1);
+    expect(res.page).toBe(50);
+  });
+  it('float page is treated as invalid (falls back to skip)', async () => {
+    const { svc, findMany } = makeService();
+    await svc.list({ page: 2.5, take: 10, skip: 7 });
+    expect(findMany.mock.calls[0][0].skip).toBe(7);
+  });
 });
 
 describe('ProductsService slug on create', () => {
