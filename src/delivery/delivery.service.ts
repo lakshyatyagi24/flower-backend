@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { isIndianPin } from '../common/validators';
 import { SETTING_DEFAULTS } from '../settings/setting-defaults';
@@ -8,6 +8,7 @@ import {
   computeOptions,
   formatDeliveryDate,
   isIsoDate,
+  NoDeliveryDatesError,
   parseBlackoutDates,
   parseCutoff,
   parseDaysAhead,
@@ -78,13 +79,25 @@ export class DeliveryService {
     };
   }
 
+  /** Blackouts that leave no deliverable day surface as a 503 the storefront shows as an error state. */
+  private guard<T>(fn: () => T): T {
+    try {
+      return fn();
+    } catch (e) {
+      if (e instanceof NoDeliveryDatesError) throw new ServiceUnavailableException(e.message);
+      throw e;
+    }
+  }
+
   /** Earliest deliverable date as `YYYY-MM-DD` (an IST calendar date). */
   async earliestDeliveryDate(now: Date = new Date()): Promise<string> {
-    return computeEarliest(now, await this.loadDateConfig());
+    const cfg = await this.loadDateConfig();
+    return this.guard(() => computeEarliest(now, cfg));
   }
 
   async deliveryOptions(now: Date = new Date()): Promise<DeliveryOptions> {
-    return computeOptions(now, await this.loadDateConfig());
+    const cfg = await this.loadDateConfig();
+    return this.guard(() => computeOptions(now, cfg));
   }
 
   /**
@@ -93,7 +106,7 @@ export class DeliveryService {
    */
   async validateDeliveryDate(date: string, now: Date = new Date()): Promise<string> {
     const cfg = await this.loadDateConfig();
-    const { earliest, latest } = computeOptions(now, cfg);
+    const { earliest, latest } = this.guard(() => computeOptions(now, cfg));
     if (!isIsoDate(date) || date < earliest || date > latest) {
       throw new BadRequestException(
         `Please choose a delivery date between ${formatDeliveryDate(earliest)} and ${formatDeliveryDate(latest)}`,

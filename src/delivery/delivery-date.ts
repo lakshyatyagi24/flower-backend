@@ -88,6 +88,9 @@ export function parseBlackoutDates(raw: string | null | undefined): string[] {
 export const isValidCutoff = (s: string) => HHMM.test(s.trim());
 export const isValidLeadTimeDays = (s: string) => /^\d+$/.test(s.trim()) && Number(s.trim()) <= 30;
 export const isValidDaysAhead = (s: string) => /^\d+$/.test(s.trim()) && Number(s.trim()) >= 1 && Number(s.trim()) <= 90;
+/** Upper bound on blackout entries accepted on save (a year of dates). */
+export const MAX_BLACKOUT_DATES = 366;
+export const countBlackoutTokens = (raw: string | null | undefined) => tokens(raw).length;
 export const findInvalidBlackoutTokens = (raw: string | null | undefined) =>
   tokens(raw).filter((t): boolean => !isIsoDate(t));
 
@@ -98,11 +101,19 @@ export interface DeliveryConfig {
   blackout: string[];
 }
 
+/** Thrown when blackout dates leave no deliverable day within the safety cap. */
+export class NoDeliveryDatesError extends Error {
+  constructor() {
+    super('No delivery dates are available right now');
+  }
+}
+
 export function computeEarliest(now: Date, cfg: DeliveryConfig): string {
   const { date, minutes } = istNow(now);
   let candidate = addDays(date, (minutes >= cfg.cutoffMinutes ? 1 : 0) + cfg.leadTimeDays);
   const blocked = new Set(cfg.blackout);
   for (let i = 0; i < MAX_SKIP_DAYS && blocked.has(candidate); i++) candidate = addDays(candidate, 1);
+  if (blocked.has(candidate)) throw new NoDeliveryDatesError();
   return candidate;
 }
 

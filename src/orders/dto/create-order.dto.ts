@@ -1,6 +1,6 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMinSize, IsArray, IsDateString, IsDefined, IsEmail, IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, Min, ValidateNested,
+  ArrayMinSize, IsArray, IsEmail, IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, Min, ValidateNested,
 } from 'class-validator';
 import { IsIndianPhone, IsIndianPin } from '../../common/validators';
 
@@ -25,8 +25,9 @@ export class CreateOrderDto {
    * REQUIRED for new orders: the storefront always sends it. The range and blackout rules are checked in
    * OrdersService.create via DeliveryService.validateDeliveryDate.
    */
-  @IsDefined({ message: 'Please choose a delivery date' })
-  @IsDateString({ strict: true }, { message: 'Delivery date must be a valid date in YYYY-MM-DD format' })
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'Delivery date must be a valid date in YYYY-MM-DD format' })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    // One message only: a missing value and a malformed one each get a single clear sentence.
+    message: (a) => (a.value === undefined || a.value === null || a.value === '' ? 'Please choose a delivery date' : 'Delivery date must be a valid date in YYYY-MM-DD format'),
+  })
   deliveryDate!: string;
 }

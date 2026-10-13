@@ -4,6 +4,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { DeliveryService } from '../src/delivery/delivery.service';
+import { pinDeliveryRules } from './delivery-rules-helper';
 import { SettingsService } from '../src/settings/settings.service';
 
 const KEY = 'delivery.supportedPincodes';
@@ -13,6 +14,7 @@ describe('Delivery serviceability (e2e)', () => {
   let prisma: PrismaService;
   let previous: string | null = null;
   let hadRow = false;
+  let restoreRules: () => Promise<void>;
 
   beforeAll(async () => {
     const m = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -23,10 +25,12 @@ describe('Delivery serviceability (e2e)', () => {
     const row = await prisma.setting.findUnique({ where: { key: KEY } });
     hadRow = !!row;
     previous = row?.value ?? null;
+    restoreRules = await pinDeliveryRules(prisma);
   });
   afterAll(async () => {
     if (hadRow) await prisma.setting.update({ where: { key: KEY }, data: { value: previous! } });
     else await prisma.setting.deleteMany({ where: { key: KEY } });
+    await restoreRules();
     await app.close();
   });
 
@@ -110,6 +114,8 @@ describe('Delivery date (e2e)', () => {
     delivery = app.get(DeliveryService);
     saved = await prisma.setting.findMany({ where: { key: { in: KEYS } } });
     await prisma.setting.deleteMany({ where: { key: { in: KEYS } } });
+    await put('delivery.cutoffTime', '23:59');
+    await put('delivery.leadTimeDays', '1');
     const p = await prisma.product.create({
       data: { name: 'E2E Date Rose', slug: `e2e-date-${Date.now()}`, price: 100, stock: 10, active: true, saleMode: 'PURCHASE' },
     });
@@ -154,10 +160,10 @@ describe('Delivery date (e2e)', () => {
     const before = await stock();
     const missing = await post();
     expect(missing.status).toBe(400);
-    expect(JSON.stringify(missing.body.message)).toMatch(/choose a delivery date/);
+    expect(missing.body.message).toEqual(['Please choose a delivery date']);
     const stamp = await post(`${earliest}T00:00:00.000Z`);
     expect(stamp.status).toBe(400);
-    expect(JSON.stringify(stamp.body.message)).toMatch(/YYYY-MM-DD/);
+    expect(stamp.body.message).toEqual(['Delivery date must be a valid date in YYYY-MM-DD format']);
     const early = await post(addDays(earliest, -1));
     expect(early.status).toBe(400);
     expect(JSON.stringify(early.body.message)).toMatch(/Please choose a delivery date between/);

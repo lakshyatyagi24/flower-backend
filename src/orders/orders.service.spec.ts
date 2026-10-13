@@ -109,17 +109,24 @@ describe('OrdersService mail hooks', () => {
     expect(mail.sendOrderPlaced).not.toHaveBeenCalled();
   });
 
-  it('listAll sorts by delivery date (nulls last, newest created first as tie-break) on request', async () => {
-    const { svc, prisma } = makeFakes();
-    prisma.order.findMany = jest.fn(async () => []);
-    prisma.order.count = jest.fn(async () => 0);
-    await svc.listAll({ sort: 'deliveryDate' });
-    expect(prisma.order.findMany.mock.calls[0][0].orderBy).toEqual([
-      { deliveryDate: { sort: 'asc', nulls: 'last' } },
-      { createdAt: 'desc' },
-    ]);
-    await svc.listAll({ sort: 'bogus' });
-    expect(prisma.order.findMany.mock.calls[1][0].orderBy).toEqual({ createdAt: 'desc' });
+  it('listAll sort=deliveryDate lists only upcoming deliveries (today IST or later), soonest first', async () => {
+    jest.useFakeTimers({ now: new Date('2026-10-13T19:00:00Z') }); // 00:30 IST on the 14th
+    try {
+      const { svc, prisma } = makeFakes();
+      prisma.order.findMany = jest.fn(async () => []);
+      prisma.order.count = jest.fn(async () => 0);
+      await svc.listAll({ sort: 'deliveryDate' });
+      const args = prisma.order.findMany.mock.calls[0][0];
+      expect(args.orderBy).toEqual([{ deliveryDate: 'asc' }, { createdAt: 'desc' }]);
+      expect(args.where.deliveryDate.gte.toISOString()).toBe('2026-10-14T00:00:00.000Z');
+      expect(prisma.order.count.mock.calls[0][0].where.deliveryDate).toBeDefined();
+      await svc.listAll({ sort: 'bogus' });
+      const plain = prisma.order.findMany.mock.calls[1][0];
+      expect(plain.orderBy).toEqual({ createdAt: 'desc' });
+      expect(plain.where.deliveryDate).toBeUndefined();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('create still sends order-placed for an explicit COD order', async () => {

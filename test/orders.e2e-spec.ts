@@ -4,18 +4,24 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { DeliveryService } from '../src/delivery/delivery.service';
+import { pinDeliveryRules } from './delivery-rules-helper';
 
 describe('Orders validation (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
+  let restoreRules: () => Promise<void>;
   beforeAll(async () => {
     const m = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = m.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     await app.init();
     prisma = app.get(PrismaService);
+    restoreRules = await pinDeliveryRules(prisma);
   });
-  afterAll(() => app.close());
+  afterAll(async () => {
+    await restoreRules();
+    await app.close();
+  });
 
   it('rejects an order with a bad phone and PIN', async () => {
     const res = await request(app.getHttpServer()).post('/orders').send({

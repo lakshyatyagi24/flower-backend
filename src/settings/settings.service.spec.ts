@@ -110,3 +110,19 @@ describe('SettingsService.upsert delivery date settings validation', () => {
     expect(upsert).not.toHaveBeenCalled();
   });
 });
+
+describe('SettingsService.upsert blackout date count', () => {
+  const makeWrite = () => {
+    const upsert = jest.fn((args: any) => args);
+    const prisma: any = { setting: { upsert, findMany: jest.fn(async () => []) }, $transaction: jest.fn(async (ops: any[]) => ops) };
+    return { svc: new SettingsService(prisma), upsert };
+  };
+  const dates = (n: number) => Array.from({ length: n }, (_, i) => new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10)).join(',');
+  it('accepts 366 dates and rejects 367 without writing', async () => {
+    const { svc, upsert } = makeWrite();
+    await svc.upsert({ 'delivery.blackoutDates': dates(366) });
+    expect(upsert).toHaveBeenCalledTimes(1);
+    await expect(svc.upsert({ 'delivery.blackoutDates': dates(367) })).rejects.toThrow(/too many entries.*366/);
+    expect(upsert).toHaveBeenCalledTimes(1);
+  });
+});

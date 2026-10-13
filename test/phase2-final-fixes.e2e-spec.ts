@@ -7,6 +7,7 @@ import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { MailService } from '../src/mail/mail.service';
 import { DeliveryService } from '../src/delivery/delivery.service';
+import { pinDeliveryRules } from './delivery-rules-helper';
 import { PaymentsService } from '../src/payments/payments.service';
 import { RAZORPAY_CLIENT } from '../src/payments/razorpay.client';
 import { signJwt } from '../src/auth/jwt.util';
@@ -35,6 +36,7 @@ describe('Phase 2 final fixes (e2e)', () => {
   const userAuth = () => `Bearer ${signJwt({ sub: userId, email, role: 'CUSTOMER' })}`;
   const adminAuth = () => `Bearer ${signJwt({ sub: 999999, email: 'admin@example.com', role: 'ADMIN' })}`;
   let deliveryDate = '';
+  let restoreRules: (() => Promise<void>) | undefined;
   const orderBody = (paymentMethod: string) => ({
     items: [{ productId, quantity: 1 }], customerName: 'FF', customerEmail: email, customerPhone: '9354016059',
     shippingAddress: '1 Test Road', city: 'Delhi', postalCode: '110001', paymentMethod,
@@ -51,8 +53,9 @@ describe('Phase 2 final fixes (e2e)', () => {
     applyBodyParsers(app);
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
     await app.init();
-    deliveryDate = await app.get(DeliveryService).earliestDeliveryDate();
     prisma = app.get(PrismaService);
+    restoreRules = await pinDeliveryRules(prisma);
+    deliveryDate = await app.get(DeliveryService).earliestDeliveryDate();
     userId = (await prisma.user.create({ data: { email, password: 'x', name: 'FF' } })).id;
     productId = (await prisma.product.create({
       data: { name: 'FF Rose', slug: `ff-rose-${tag}`, price: 100, stock: 50, active: true, saleMode: 'PURCHASE' },
@@ -66,6 +69,7 @@ describe('Phase 2 final fixes (e2e)', () => {
     if (productId) await prisma.product.deleteMany({ where: { id: productId } });
     if (userId) await prisma.user.deleteMany({ where: { id: userId } });
     setKeys(saved.id, saved.secret);
+    await restoreRules?.();
     await app.close();
   });
 

@@ -3,7 +3,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SETTING_DEFAULTS } from './setting-defaults';
 import { findInvalidPincodeTokens } from '../delivery/pincode-rules';
 import {
+  countBlackoutTokens,
   findInvalidBlackoutTokens,
+  MAX_BLACKOUT_DATES,
   isValidCutoff,
   isValidDaysAhead,
   isValidLeadTimeDays,
@@ -93,6 +95,9 @@ export class SettingsService {
     const ahead = values['delivery.daysAhead'];
     if (ahead !== undefined && ahead.trim() !== '' && !isValidDaysAhead(ahead)) {
       throw new BadRequestException(`Booking window "${ahead.slice(0, 20)}" is not valid. Use a whole number of days from 1 to 90.`);
+    }
+    if (countBlackoutTokens(values['delivery.blackoutDates']) > MAX_BLACKOUT_DATES) {
+      throw new BadRequestException(`Unavailable dates has too many entries. Use at most ${MAX_BLACKOUT_DATES} dates.`);
     }
     const badDates = findInvalidBlackoutTokens(values['delivery.blackoutDates']);
     if (badDates.length > 0) {

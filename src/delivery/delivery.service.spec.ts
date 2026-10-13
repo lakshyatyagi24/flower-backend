@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import { DeliveryService, parsePincodeRules } from './delivery.service';
 import { findInvalidPincodeTokens } from './pincode-rules';
 
@@ -145,5 +145,20 @@ describe('DeliveryService delivery dates', () => {
         await expect(s().validateDeliveryDate(bad, MORNING)).rejects.toBeInstanceOf(BadRequestException);
       }
     });
+  });
+});
+
+describe('DeliveryService with every day blacked out', () => {
+  it('answers 503 "No delivery dates are available right now" for options, earliest and validation', async () => {
+    const days = Array.from({ length: 420 }, (_, i) => new Date(Date.UTC(2026, 9, 13 + i)).toISOString().slice(0, 10));
+    const prisma: any = {
+      setting: { findMany: jest.fn(async () => [{ key: 'delivery.blackoutDates', value: days.join(',') }]) },
+    };
+    const s = new DeliveryService(prisma);
+    const now = new Date('2026-10-13T05:00:00Z');
+    for (const call of [() => s.deliveryOptions(now), () => s.earliestDeliveryDate(now), () => s.validateDeliveryDate('2026-10-20', now)]) {
+      await expect(call()).rejects.toBeInstanceOf(ServiceUnavailableException);
+      await expect(call()).rejects.toThrow('No delivery dates are available right now');
+    }
   });
 });

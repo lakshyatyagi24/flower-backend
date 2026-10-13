@@ -12,7 +12,7 @@ import { isOnlinePaymentsEnabled } from '../payments/config';
 import { joinRefundNote, splitRefundNote } from './refund-note';
 import { SETTING_DEFAULTS } from '../settings/setting-defaults';
 import { DeliveryService } from '../delivery/delivery.service';
-import { toStoredDate } from '../delivery/delivery-date';
+import { istNow, toStoredDate } from '../delivery/delivery-date';
 
 interface OrderItemInput {
   productId: number;
@@ -354,13 +354,17 @@ export class OrdersService {
     if (params.attention && Object.prototype.hasOwnProperty.call(ATTENTION_WHERE, params.attention)) {
       where.AND = [ATTENTION_WHERE[params.attention as AttentionKey]];
     }
+    // "Upcoming deliveries": only orders due today (India date) or later, soonest first, so a long history of
+    // past deliveries can never push upcoming ones out of the 200-row page.
+    const upcoming = params.sort === 'deliveryDate';
+    if (upcoming) where.deliveryDate = { gte: toStoredDate(istNow(new Date()).date) };
     const take = Math.min(Math.max(params.take ?? 50, 1), 200);
     const skip = Math.max(params.skip ?? 0, 0);
     const [items, total] = await Promise.all([
       this.prisma.order.findMany({
         where,
         include: this.include,
-        orderBy: params.sort === 'deliveryDate' ? [{ deliveryDate: { sort: 'asc', nulls: 'last' } }, { createdAt: 'desc' }] : { createdAt: 'desc' },
+        orderBy: upcoming ? [{ deliveryDate: 'asc' }, { createdAt: 'desc' }] : { createdAt: 'desc' },
         take,
         skip,
       }),

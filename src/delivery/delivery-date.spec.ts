@@ -1,7 +1,7 @@
 import {
   addDays, computeEarliest, computeOptions, findInvalidBlackoutTokens, formatDeliveryDate, isIsoDate, isValidCutoff,
   isValidDaysAhead, isValidLeadTimeDays, istNow, parseBlackoutDates, parseCutoff, parseDaysAhead, parseLeadTimeDays,
-  toStoredDate, type DeliveryConfig,
+  toStoredDate, NoDeliveryDatesError, type DeliveryConfig,
 } from './delivery-date';
 
 const cfg = (over: Partial<DeliveryConfig> = {}): DeliveryConfig => ({
@@ -51,9 +51,13 @@ describe('computeEarliest', () => {
   it('ignores blackout dates that are not in the way', () => {
     expect(computeEarliest(new Date('2026-10-13T05:00:00Z'), cfg({ blackout: ['2026-10-20'] }))).toBe('2026-10-13');
   });
-  it('terminates when blackouts cover more than the safety cap', () => {
+  it('throws NoDeliveryDatesError (does not loop forever) when blackouts cover more than the safety cap', () => {
     const blackout = Array.from({ length: 500 }, (_, i) => addDays('2026-10-13', i));
-    expect(() => computeEarliest(new Date('2026-10-13T05:00:00Z'), cfg({ blackout }))).not.toThrow();
+    expect(() => computeEarliest(new Date('2026-10-13T05:00:00Z'), cfg({ blackout }))).toThrow(NoDeliveryDatesError);
+  });
+  it('still finds a date when blackouts end just inside the cap', () => {
+    const blackout = Array.from({ length: 399 }, (_, i) => addDays('2026-10-13', i));
+    expect(computeEarliest(new Date('2026-10-13T05:00:00Z'), cfg({ blackout }))).toBe(addDays('2026-10-13', 399));
   });
   it('a 00:00 cut-off always moves to the next day', () => {
     // 2026-10-13T18:31Z = 00:01 IST on the 14th -> next day is the 15th
