@@ -1,6 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 
+const allowAll: any = { isServiceable: jest.fn(async () => true) };
+
 function makeFakes(existingStatus = 'PAID') {
   const order = {
     id: 5, status: existingStatus, customerEmail: 'c@x.com', customerName: 'C', total: 100, subtotal: 100,
@@ -31,7 +33,7 @@ function makeFakes(existingStatus = 'PAID') {
     sendOrderPlaced: jest.fn(async () => undefined),
     sendOrderShipped: jest.fn(async () => undefined),
   };
-  return { prisma, mail, svc: new OrdersService(prisma, mail) };
+  return { prisma, mail, svc: new OrdersService(prisma, mail, allowAll) };
 }
 
 const input = {
@@ -60,6 +62,18 @@ describe('OrdersService mail hooks', () => {
   it('create does NOT send order-placed for a RAZORPAY order (unpaid until verified)', async () => {
     const { svc, mail } = makeFakes();
     await svc.create(null, { ...input, paymentMethod: 'RAZORPAY' });
+    expect(mail.sendOrderPlaced).not.toHaveBeenCalled();
+  });
+
+  it('create rejects an unserviceable PIN before touching products, stock or mail', async () => {
+    const { svc, prisma, mail } = makeFakes();
+    const delivery: any = { isServiceable: jest.fn(async () => false) };
+    const strict = new OrdersService(prisma, mail, delivery);
+    await expect(strict.create(null, input)).rejects.toThrow('We do not deliver to this PIN code yet');
+    await expect(strict.create(7, input)).rejects.toBeInstanceOf(BadRequestException);
+    expect(delivery.isServiceable).toHaveBeenCalledWith('110001');
+    expect(prisma.product.findMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(mail.sendOrderPlaced).not.toHaveBeenCalled();
   });
 
@@ -199,7 +213,7 @@ function makeCancelFakes(status = 'PAID', items: any[] = [{ productId: 1, quanti
     $transaction: jest.fn(async (fn: any) => fn(tx)),
   };
   const mail: any = { sendOrderShipped: jest.fn(async () => undefined) };
-  return { svc: new OrdersService(prisma, mail), tx, stock, state };
+  return { svc: new OrdersService(prisma, mail, allowAll), tx, stock, state };
 }
 
 describe('OrdersService.cancelAndRestock', () => {
@@ -338,7 +352,7 @@ describe('OrdersService.switchToCod', () => {
       },
     };
     const mail: any = { sendOrderPlaced: jest.fn(async () => undefined) };
-    return { svc: new OrdersService(prisma, mail), prisma, mail };
+    return { svc: new OrdersService(prisma, mail, allowAll), prisma, mail };
   }
 
   it('success: CAS switch, nulls razorpayOrderId, one placed mail, customer-safe shape', async () => {
@@ -420,7 +434,7 @@ describe('OrdersService.adminUpdate payment fields', () => {
       $transaction: jest.fn(async (fn: any) => fn(tx)),
     };
     const mail: any = { sendOrderShipped: jest.fn(async () => undefined), sendOrderPaid: jest.fn(), sendOrderPlaced: jest.fn() };
-    return { row, tx, mail, prisma, svc: new OrdersService(prisma, mail) };
+    return { row, tx, mail, prisma, svc: new OrdersService(prisma, mail, allowAll) };
   }
 
   it('PAID -> REFUNDED via guarded CAS (bound to the paymentStatus and note read); status untouched, no restock, no mail', async () => {
@@ -523,7 +537,7 @@ describe('OrdersService.listAll / stats payment filters', () => {
       user: { count: jest.fn(async () => 0) },
       enquiry: { count: jest.fn(async () => 0) },
     };
-    return { svc: new OrdersService(prisma, {} as any), findMany, count, aggregate: prisma.order.aggregate as jest.Mock };
+    return { svc: new OrdersService(prisma, {} as any, allowAll), findMany, count, aggregate: prisma.order.aggregate as jest.Mock };
   }
   const whereOf = (findMany: jest.Mock) => findMany.mock.calls[0][0].where;
 
@@ -626,7 +640,7 @@ describe('OrdersService.switchToCod abandoned-order marker', () => {
         }),
       },
     };
-    return { svc: new OrdersService(prisma, { sendOrderPlaced: jest.fn(async () => undefined) } as any), prisma };
+    return { svc: new OrdersService(prisma, { sendOrderPlaced: jest.fn(async () => undefined) } as any, allowAll), prisma };
   }
   const base = (over: any = {}) => ({
     id: 5, userId: null, status: 'PENDING', paymentStatus: 'UNPAID', paymentMethod: 'RAZORPAY',

@@ -11,6 +11,7 @@ import { MailService } from '../mail/mail.service';
 import { isOnlinePaymentsEnabled } from '../payments/config';
 import { joinRefundNote, splitRefundNote } from './refund-note';
 import { SETTING_DEFAULTS } from '../settings/setting-defaults';
+import { DeliveryService } from '../delivery/delivery.service';
 
 interface OrderItemInput {
   productId: number;
@@ -68,6 +69,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mail: MailService,
+    private readonly delivery: DeliveryService,
   ) {}
 
   private include = {
@@ -109,6 +111,11 @@ export class OrdersService {
 
     if (input.paymentMethod === 'RAZORPAY' && !isOnlinePaymentsEnabled()) {
       throw new BadRequestException('Online payments are currently unavailable. Please choose cash on delivery.');
+    }
+
+    // Serviceability gate: runs before any product/stock work or side effect.
+    if (!(await this.delivery.isServiceable((input.postalCode ?? '').trim()))) {
+      throw new BadRequestException('We do not deliver to this PIN code yet');
     }
 
     const productIds = input.items.map((i) => i.productId);

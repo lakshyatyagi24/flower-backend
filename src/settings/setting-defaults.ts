@@ -16,4 +16,6 @@ export const SETTING_DEFAULTS: Record<string, string> = {
   'store.gstin': '',
   'shipping.flatRate': '99',
   'shipping.freeThreshold': '1499',
+  // Comma/whitespace/newline separated 6-digit PINs and prefix patterns (e.g. "110001, 1100*"). Empty = unrestricted.
+  'delivery.supportedPincodes': '',
 };
