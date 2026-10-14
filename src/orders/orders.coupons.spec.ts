@@ -32,7 +32,7 @@ const baseCoupon = (over: Record<string, unknown> = {}) => ({
   maxUses: null, usedCount: 0, active: true, ...over,
 });
 
-function makeEnv(opts: { coupon?: any; stock?: number; price?: number; gstRate?: number; settings?: Record<string, string>; raceReads?: number } = {}) {
+function makeEnv(opts: { coupon?: any; stock?: number; price?: number; gstRate?: number; settings?: Record<string, string>; raceReads?: number; products?: any[] } = {}) {
   const state: any = {
     stock: opts.stock ?? 10,
     coupon: opts.coupon === undefined ? baseCoupon() : opts.coupon,
@@ -47,7 +47,7 @@ function makeEnv(opts: { coupon?: any; stock?: number; price?: number; gstRate?:
   const tx = (undo: Array<() => void>) => ({
     coupon: {
       findUnique: jest.fn(async ({ where }: any) => {
-        const c = state.coupon && state.coupon.code === where.code ? { ...state.coupon } : null;
+        const c = state.coupon && (where.code === undefined || state.coupon.code === where.code) && (where.id === undefined || state.coupon.id === where.id) ? { ...state.coupon } : null;
         if (opts.raceReads) {
           reads++;
           if (reads >= opts.raceReads) release();
@@ -112,7 +112,7 @@ function makeEnv(opts: { coupon?: any; stock?: number; price?: number; gstRate?:
 
   const prisma: any = {
     product: {
-      findMany: jest.fn(async () => [
+      findMany: jest.fn(async () => opts.products ?? [
         { id: 1, name: 'Rose', price: opts.price ?? 1000, stock: state.stock, active: true, saleMode: 'PURCHASE', gstRate: opts.gstRate ?? 0, minOrderQty: 1 },
       ]),
     },
@@ -190,10 +190,78 @@ describe('OrdersService.create with a coupon', () => {
     expect(state.stock).toBe(10);
   });
 
-  it('total = subtotal - discount + shipping + GST (GST stays on the undiscounted lines)', async () => {
-    const { svc } = makeEnv({ price: 1000, gstRate: 18, coupon: baseCoupon({ value: 20 }) });
+  it('GST is charged on the value AFTER the discount: 1000 less 200 at 18% is 144, not 180', async () => {
+    const { svc, state } = makeEnv({ price: 1000, gstRate: 18, coupon: baseCoupon({ value: 20 }) });
     const o: any = await svc.create(null, { ...input, couponCode: 'SAVE10' });
-    expect(o).toMatchObject({ subtotal: 1000, discount: 200, gst: 180, shipping: 99, total: 1079 });
+    expect(o).toMatchObject({ subtotal: 1000, discount: 200, gst: 144, shipping: 99, total: 1043 });
+    expect(state.items.map((i: any) => i.gstAmount)).toEqual([144]); // the persisted line matches the order
+  });
+
+  it('without a coupon GST is unchanged (line * rate)', async () => {
+    const { svc, state } = makeEnv({ price: 1000, gstRate: 18 });
+    const o: any = await svc.create(null, input);
+    expect(o).toMatchObject({ discount: 0, gst: 180, total: 1279 });
+    expect(state.items[0].gstAmount).toBe(180);
+  });
+
+  it('zero-rate lines stay at zero GST with a coupon', async () => {
+    const { svc } = makeEnv({ price: 1000, gstRate: 0, coupon: baseCoupon({ value: 20 }) });
+    const o: any = await svc.create(null, { ...input, couponCode: 'SAVE10' });
+    expect(o).toMatchObject({ gst: 0, total: 899 });
+  });
+
+  it('percent + maxDiscount: GST follows the capped discount', async () => {
+    const { svc } = makeEnv({ price: 2000, gstRate: 5, coupon: baseCoupon({ value: 50, maxDiscount: 150 }) });
+    const o: any = await svc.create(null, { ...input, couponCode: 'SAVE10' });
+    // taxable 2000 - 150 = 1850 -> 92.5; shipping free (>= 1499)
+    expect(o).toMatchObject({ discount: 150, gst: 92.5, shipping: 0, total: 1942.5 });
+  });
+
+  it('multi-line: the discount is spread in proportion, the last line takes the rounding remainder, sums are exact', async () => {
+    const products = [
+      { id: 1, name: 'A', price: 333.33, stock: 99, active: true, saleMode: 'PURCHASE', gstRate: 18, minOrderQty: 1 },
+      { id: 2, name: 'B', price: 333.33, stock: 99, active: true, saleMode: 'PURCHASE', gstRate: 12, minOrderQty: 1 },
+      { id: 3, name: 'C', price: 333.34, stock: 99, active: true, saleMode: 'PURCHASE', gstRate: 5, minOrderQty: 1 },
+    ];
+    const { svc, state } = makeEnv({ products, stock: 99, coupon: baseCoupon({ type: 'FLAT', value: 100 }), settings: { 'shipping.flatRate': '0' } });
+    const o: any = await svc.create(null, {
+      ...input,
+      couponCode: 'SAVE10',
+      items: [{ productId: 1, quantity: 1 }, { productId: 2, quantity: 1 }, { productId: 3, quantity: 1 }],
+    });
+    // discounts 33.33 + 33.33 + 33.34 = 100; taxable 300 each; gst 54 + 36 + 15
+    expect(state.items.map((i: any) => i.gstAmount)).toEqual([54, 36, 15]);
+    expect(o).toMatchObject({ subtotal: 1000, discount: 100, gst: 105, total: 1005 });
+    expect(state.items.reduce((s: number, i: any) => s + i.gstAmount, 0)).toBe(o.gst);
+  });
+
+  it('the minimum-total check includes the post-discount GST', async () => {
+    const { svc } = makeEnv({ price: 2, gstRate: 50, settings: { 'shipping.flatRate': '0' }, coupon: baseCoupon({ type: 'FLAT', value: 1 }) });
+    // 2 - 1 + gst(1 at 50%) = 1.5, allowed
+    const o: any = await svc.create(null, { ...input, couponCode: 'SAVE10' });
+    expect(o.total).toBe(1.5);
+  });
+
+  it('a claim lost to an expiry after the read names the real reason', async () => {
+    const env = makeEnv({ price: 1000 });
+    const real = env.prisma.$transaction;
+    env.prisma.$transaction = jest.fn(async (fn: any) =>
+      real(async (tx: any) => {
+        const find = tx.coupon.findUnique;
+        let first = true;
+        tx.coupon.findUnique = jest.fn(async (a: any) => {
+          const c = await find(a);
+          if (first) {
+            first = false;
+            env.state.coupon.expiresAt = new Date(Date.now() - 1000);
+          }
+          return c;
+        });
+        return fn(tx);
+      }),
+    );
+    await expect(env.svc.create(null, { ...input, couponCode: 'SAVE10' })).rejects.toThrow('Coupon expired');
+    expect(env.state.coupon.usedCount).toBe(0);
   });
 
   it('percent cap and flat cap are respected', async () => {
@@ -302,7 +370,7 @@ describe('OrdersService.create with a coupon', () => {
         return fn(tx);
       }),
     );
-    await expect(env.svc.create(null, { ...input, couponCode: 'SAVE10' })).rejects.toThrow('Coupon usage limit reached');
+    await expect(env.svc.create(null, { ...input, couponCode: 'SAVE10' })).rejects.toThrow('Coupon not found');
     expect(env.state.coupon.usedCount).toBe(0);
     expect(env.state.orders).toHaveLength(0);
   });

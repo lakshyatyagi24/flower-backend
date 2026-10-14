@@ -18,6 +18,7 @@ import { round2 } from '../common/money';
 import {
   belowMinimumTotalError, couponError, evaluateCoupon, MIN_DISCOUNTED_TOTAL, normalizeCouponCode,
 } from '../coupons/coupon-rules';
+import { gstPerLine } from '../coupons/discount-tax';
 
 interface OrderItemInput {
   productId: number;
@@ -151,7 +152,7 @@ export class OrdersService {
     const productMap = new Map<number, ProductRow>(products.map((p) => [p.id, p]));
 
     let subtotal = 0;
-    let gstTotal = 0;
+    const taxLines: Array<{ lineTotal: number; gstRate: number }> = [];
     const itemRows = input.items.map((it) => {
       const product = productMap.get(it.productId)!;
       if (!product.active) throw new BadRequestException(`Product "${product.name}" is not available`);
@@ -173,25 +174,25 @@ export class OrdersService {
       }
       const lineTotal = product.price * qty;
       const gstRate = product.gstRate || 0;
-      const gstAmount = +((lineTotal * gstRate) / 100).toFixed(2);
       subtotal += lineTotal;
-      gstTotal += gstAmount;
+      taxLines.push({ lineTotal, gstRate });
       return {
         productId: product.id,
         productName: product.name,
         quantity: qty,
         unitPrice: product.price,
         gstRate,
-        gstAmount,
+        // Filled in inside the transaction, once the coupon discount (if any) is known.
+        gstAmount: 0,
       };
     });
 
     const flatRate = await this.loadShippingRate();
     const freeThreshold = await this.loadFreeShippingThreshold();
     const shipping = freeThreshold !== null && subtotal >= freeThreshold ? 0 : flatRate;
-    const gst = +gstTotal.toFixed(2);
     // R19: free shipping and the coupon minimum are both judged on the PRE-discount subtotal (above). The discount
-    // comes off the item subtotal only; GST and shipping are as computed above (GST stays on pre-discount lines).
+    // comes off the item subtotal; GST is charged on the value AFTER the discount (spread over the lines in
+    // proportion, see discount-tax.ts), so a discount also lowers the tax. Shipping is unaffected.
     const couponInput = normalizeCouponCode(input.couponCode);
 
     // For a logged-in buyer, bind the order's tracking email to their account
@@ -213,7 +214,8 @@ export class OrdersService {
       if (couponInput) {
         const coupon = await tx.coupon.findUnique({ where: { code: couponInput } });
         discount = evaluateCoupon(coupon, subtotal);
-        if (round2(subtotal - discount + shipping + gst) < MIN_DISCOUNTED_TOTAL) throw belowMinimumTotalError();
+        const gstIfApplied = gstPerLine(taxLines, discount).reduce((a, b) => a + b, 0);
+        if (round2(subtotal - discount + shipping + gstIfApplied) < MIN_DISCOUNTED_TOTAL) throw belowMinimumTotalError();
         // Atomic use claim: the guard is re-evaluated against the committed row, so of N concurrent orders
         // racing for the last use exactly one gets count 1.
         const claimed = await tx.coupon.updateMany({
@@ -227,9 +229,17 @@ export class OrdersService {
           },
           data: { usedCount: { increment: 1 } },
         });
-        if (claimed.count === 0) throw couponError('Coupon usage limit reached');
+        if (claimed.count === 0) {
+          // Lost the race (or the coupon changed after we read it): re-read it so the error names the real reason.
+          const fresh = await tx.coupon.findUnique({ where: { id: coupon!.id } });
+          evaluateCoupon(fresh, subtotal); // throws not found / expired / usage limit as appropriate
+          throw couponError('Coupon usage limit reached');
+        }
         couponCode = coupon!.code;
       }
+      const lineGst = gstPerLine(taxLines, discount);
+      const rows = itemRows.map((r, i) => ({ ...r, gstAmount: lineGst[i] }));
+      const gst = round2(lineGst.reduce((a, b) => a + b, 0));
       const total = round2(subtotal - discount + shipping + gst);
 
       // Atomically claim stock BEFORE creating the order. updateMany with a
@@ -267,7 +277,7 @@ export class OrdersService {
           postalCode: input.postalCode?.trim() || null,
           notes: input.notes?.trim() || null,
           deliveryDate: toStoredDate(deliveryDate),
-          items: { create: itemRows },
+          items: { create: rows },
         },
         include: this.include,
       });

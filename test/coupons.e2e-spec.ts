@@ -14,6 +14,7 @@ describe('Coupons (e2e)', () => {
   let restoreRules: () => Promise<void>;
   let deliveryDate: string;
   let productId: number;
+  let taxedProductId: number;
   const tag = `E2EC${Date.now().toString(36).toUpperCase()}`;
   const email = `e2e-coupons-${Date.now()}@example.com`;
   const createdOrderIds: number[] = [];
@@ -46,13 +47,17 @@ describe('Coupons (e2e)', () => {
       data: { name: 'E2E Coupon Rose', slug: `e2e-coupon-${Date.now()}`, price: 1000, stock: 20, active: true, saleMode: 'PURCHASE' },
     });
     productId = p.id;
+    const t = await prisma.product.create({
+      data: { name: 'E2E Coupon Taxed', slug: `e2e-coupon-tax-${Date.now()}`, price: 1000, stock: 20, active: true, saleMode: 'PURCHASE', gstRate: 18 },
+    });
+    taxedProductId = t.id;
   });
 
   afterAll(async () => {
     await prisma.orderItem.deleteMany({ where: { orderId: { in: createdOrderIds } } });
     await prisma.order.deleteMany({ where: { id: { in: createdOrderIds } } });
     await prisma.coupon.deleteMany({ where: { code: { in: createdCouponCodes } } });
-    await prisma.product.deleteMany({ where: { id: productId } });
+    await prisma.product.deleteMany({ where: { id: { in: [productId, taxedProductId] } } });
     await prisma.setting.deleteMany({ where: { key: { in: ['shipping.flatRate', 'shipping.freeThreshold'] } } });
     for (const r of shippingKeys) await prisma.setting.create({ data: r });
     await restoreRules();
@@ -116,6 +121,22 @@ describe('Coupons (e2e)', () => {
       }
     });
 
+    it('non-numeric ids are a 400 on every id route (no parseInt leniency)', async () => {
+      for (const id of ['1abc', 'abc', '1.5', '-1', '99999999999']) {
+        expect([id, (await http().put('/coupons/' + id).set('Authorization', admin()).send({ active: false })).status]).toEqual([id, 400]);
+        expect([id, (await http().delete('/coupons/' + id).set('Authorization', admin())).status]).toEqual([id, 400]);
+      }
+    });
+
+    it('a partial update (only active) leaves every other field, including expiry, untouched', async () => {
+      const exp = new Date('2031-01-01T18:29:59.999Z');
+      const c = await mkCoupon('PART', { expiresAt: exp, maxUses: 7, minSubtotal: 300 });
+      const res = await http().put('/coupons/' + c.id).set('Authorization', admin()).send({ active: false });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ active: false, maxUses: 7, minSubtotal: 300, value: 10, type: 'PERCENT' });
+      expect(new Date(res.body.expiresAt).getTime()).toBe(exp.getTime());
+    });
+
     it('delete: unused coupons are removed; used ones are refused with a clear message', async () => {
       const unused = await mkCoupon('DEL1');
       expect((await http().delete(`/coupons/${unused.id}`).set('Authorization', admin())).status).toBe(200);
@@ -153,6 +174,7 @@ describe('Coupons (e2e)', () => {
     });
 
     it('rejects malformed bodies', async () => {
+      expect((await http().post('/coupons/validate').send({ code: 'A'.repeat(65), subtotal: 5 })).status).toBe(400);
       expect((await http().post('/coupons/validate').send({ code: 'X' })).status).toBe(400);
       expect((await http().post('/coupons/validate').send({ code: 'X', subtotal: -5 })).status).toBe(400);
       expect((await http().post('/coupons/validate').send({ code: 'X', subtotal: 5, extra: 1 })).status).toBe(400);
@@ -171,6 +193,19 @@ describe('Coupons (e2e)', () => {
       expect(pay.status).toBe(200);
       expect(pay.body.amount).toBe(95000);
       expect(fake.createOrder).toHaveBeenLastCalledWith(95000, `order_${res.body.id}`);
+    });
+
+    it('GST is charged on the discounted value and the Razorpay amount matches the persisted total', async () => {
+      const c = await mkCoupon('GST1', { value: 20 });
+      const res = await order(c.code, { items: [{ productId: taxedProductId, quantity: 1 }] });
+      expect(res.status).toBe(201);
+      // 1000 - 200 discount + 50 shipping + 18% of 800 (= 144)
+      expect(res.body).toMatchObject({ subtotal: 1000, discount: 200, gst: 144, shipping: 50, total: 994 });
+      expect(res.body.items[0].gstAmount).toBe(144);
+      const pay = await http().post('/payments/razorpay/order').send({ orderId: res.body.id, email });
+      expect(pay.body.amount).toBe(99400);
+      const plain = await order(undefined, { items: [{ productId: taxedProductId, quantity: 1 }] });
+      expect(plain.body).toMatchObject({ discount: 0, gst: 180, total: 1230 });
     });
 
     it('a client-supplied subtotal or total is rejected, never used', async () => {

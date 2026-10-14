@@ -5,9 +5,9 @@ import { CouponsService } from './coupons.service';
 import { CreateCouponDto, UpdateCouponDto, ValidateCouponDto } from './dto/coupon.dto';
 
 function parseId(id: string): number {
-  const n = parseInt(id, 10);
-  if (isNaN(n)) throw new BadRequestException('Invalid coupon ID');
-  return n;
+  // Strict: digits only (parseInt would accept "1abc" as 1), and small enough for a Postgres int.
+  if (!/^[0-9]{1,9}$/.test(id)) throw new BadRequestException('Invalid coupon ID');
+  return Number(id);
 }
 
 @Controller('coupons')
