@@ -100,6 +100,10 @@ model Order {
   shipping        Float       @default(0)
   gst             Float       @default(0)
   total           Float
+  // Coupon applied at creation (code as stored on the Coupon row) and the rupee amount it took off the subtotal.
+  // total = subtotal - discount + shipping + gst. Orders placed before coupons existed have discount 0.
+  couponCode      String?
+  discount        Float       @default(0)
   status          OrderStatus @default(PENDING)
   paymentMethod   String      @default("COD")
   customerName    String?
@@ -256,4 +260,25 @@ model Subscriber {
   email     String   @unique
   source    String   @default("footer")
   createdAt DateTime @default(now())
+}
+
+enum CouponType {
+  PERCENT
+  FLAT
+}
+
+// Discount codes. `code` is stored UPPERCASE (the service normalises every input). `usedCount` is consumed by
+// OrdersService.create (guarded increment) and given back exactly once when an order is cancelled.
+model Coupon {
+  id          Int        @id @default(autoincrement())
+  code        String     @unique
+  type        CouponType
+  value       Float
+  minSubtotal Float      @default(0)
+  maxDiscount Float?
+  expiresAt   DateTime?
+  maxUses     Int?
+  usedCount   Int        @default(0)
+  active      Boolean    @default(true)
+  createdAt   DateTime   @default(now())
 }

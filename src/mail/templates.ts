@@ -4,6 +4,8 @@ type OrderLike = {
   id: number; total: number; subtotal: number; shipping: number; gst: number; paymentMethod: string;
   customerName: string | null; shippingAddress: string | null; city: string | null; postalCode: string | null;
   trackingNumber?: string | null; courierName?: string | null;
+  /** Coupon applied at checkout (absent/0 on orders placed before coupons existed). */
+  couponCode?: string | null; discount?: number | null;
   /** UTC midnight of the chosen IST date (null for orders placed before delivery dates existed). */
   deliveryDate?: Date | string | null;
   items: { productName: string; quantity: number; unitPrice: number }[];
@@ -33,10 +35,18 @@ function deliveryLine(o: OrderLike): string {
   return d ? `<p style="font-size:14px">Delivery date: <strong>${esc(d)}</strong></p>` : '';
 }
 
+function discountRow(o: OrderLike): string {
+  const d = o.discount ?? 0;
+  if (!(d > 0)) return '';
+  const label = o.couponCode ? `Discount (${esc(o.couponCode)})` : 'Discount';
+  return `<tr><td>${label}</td><td align="right">-${formatInr(d)}</td></tr>`;
+}
+
 function itemsTable(o: OrderLike): string {
   const rows = o.items.map((i) => `<tr><td style="padding:6px 0">${esc(i.productName)} × ${i.quantity}</td><td align="right">${formatInr(i.unitPrice * i.quantity)}</td></tr>`).join('');
   return `<table width="100%" style="border-collapse:collapse;font-size:14px">${rows}
 <tr><td style="padding-top:12px;border-top:1px solid #ddd">Subtotal</td><td align="right" style="padding-top:12px;border-top:1px solid #ddd">${formatInr(o.subtotal)}</td></tr>
+${discountRow(o)}
 <tr><td>GST</td><td align="right">${formatInr(o.gst)}</td></tr>
 <tr><td>Delivery</td><td align="right">${formatInr(o.shipping)}</td></tr>
 <tr><td style="font-weight:bold">Total</td><td align="right" style="font-weight:bold">${formatInr(o.total)}</td></tr></table>`;

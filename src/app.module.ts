@@ -16,6 +16,7 @@ import { UploadsModule } from './uploads/uploads.module';
 import { NewsletterModule } from './newsletter/newsletter.module';
 import { PaymentsModule } from './payments/payments.module';
 import { DeliveryModule } from './delivery/delivery.module';
+import { CouponsModule } from './coupons/coupons.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { DeliveryModule } from './delivery/delivery.module';
     NewsletterModule,
     PaymentsModule,
     DeliveryModule,
+    CouponsModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

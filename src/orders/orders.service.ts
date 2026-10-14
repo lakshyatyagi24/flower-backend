@@ -14,6 +14,10 @@ import { SETTING_DEFAULTS } from '../settings/setting-defaults';
 import { DeliveryService } from '../delivery/delivery.service';
 import { istNow, toStoredDate } from '../delivery/delivery-date';
 import { canAccessOrder } from './order-access';
+import { round2 } from '../common/money';
+import {
+  belowMinimumTotalError, couponError, evaluateCoupon, MIN_DISCOUNTED_TOTAL, normalizeCouponCode,
+} from '../coupons/coupon-rules';
 
 interface OrderItemInput {
   productId: number;
@@ -32,6 +36,8 @@ interface CreateOrderInput {
   paymentMethod?: string;
   /** `YYYY-MM-DD` (IST calendar date). Stored as UTC midnight of that date. */
   deliveryDate: string;
+  /** Optional coupon code; trimmed and upper-cased here. Re-validated inside the order transaction. */
+  couponCode?: string;
 }
 
 const ALLOWED_STATUSES = ['PENDING', 'PAID', 'SHIPPED', 'COMPLETED', 'CANCELLED'] as const;
@@ -184,7 +190,9 @@ export class OrdersService {
     const freeThreshold = await this.loadFreeShippingThreshold();
     const shipping = freeThreshold !== null && subtotal >= freeThreshold ? 0 : flatRate;
     const gst = +gstTotal.toFixed(2);
-    const total = +(subtotal + shipping + gst).toFixed(2);
+    // R19: free shipping and the coupon minimum are both judged on the PRE-discount subtotal (above). The discount
+    // comes off the item subtotal only; GST and shipping are as computed above (GST stays on pre-discount lines).
+    const couponInput = normalizeCouponCode(input.couponCode);
 
     // For a logged-in buyer, bind the order's tracking email to their account
     // email so ownership (userId) and the email-based tracking key cannot diverge.
@@ -198,6 +206,32 @@ export class OrdersService {
     }
 
     const created = await this.prisma.$transaction(async (tx) => {
+      // Coupon FIRST, inside the transaction and against the server-computed subtotal: any failure rolls the
+      // whole order back (stock claims below have not happened yet, or are undone with the rollback).
+      let discount = 0;
+      let couponCode: string | null = null;
+      if (couponInput) {
+        const coupon = await tx.coupon.findUnique({ where: { code: couponInput } });
+        discount = evaluateCoupon(coupon, subtotal);
+        if (round2(subtotal - discount + shipping + gst) < MIN_DISCOUNTED_TOTAL) throw belowMinimumTotalError();
+        // Atomic use claim: the guard is re-evaluated against the committed row, so of N concurrent orders
+        // racing for the last use exactly one gets count 1.
+        const claimed = await tx.coupon.updateMany({
+          where: {
+            id: coupon!.id,
+            active: true,
+            AND: [
+              { OR: [{ maxUses: null }, { usedCount: { lt: coupon!.maxUses ?? 0 } }] },
+              { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+            ],
+          },
+          data: { usedCount: { increment: 1 } },
+        });
+        if (claimed.count === 0) throw couponError('Coupon usage limit reached');
+        couponCode = coupon!.code;
+      }
+      const total = round2(subtotal - discount + shipping + gst);
+
       // Atomically claim stock BEFORE creating the order. updateMany with a
       // `stock >= qty` guard serializes concurrent buyers — if another order
       // took the last units between our snapshot and now, count is 0 and we
@@ -220,6 +254,8 @@ export class OrdersService {
           subtotal,
           shipping,
           gst,
+          couponCode,
+          discount,
           total,
           status: 'PENDING',
           paymentMethod: input.paymentMethod || 'COD',
@@ -407,6 +443,15 @@ export class OrdersService {
       data: { status: 'CANCELLED' },
     });
     if (flipped.count !== 1) return false;
+    // Coupon give-back (R19). Reached only by the call that performed the CANCELLED flip above, so it happens
+    // exactly once per order; the `usedCount > 0` guard keeps the counter from ever going negative.
+    const couponRow = await tx.order.findUnique({ where: { id: orderId }, select: { couponCode: true } });
+    if (couponRow?.couponCode) {
+      await tx.coupon.updateMany({
+        where: { code: couponRow.couponCode, usedCount: { gt: 0 } },
+        data: { usedCount: { decrement: 1 } },
+      });
+    }
     const items = await tx.orderItem.findMany({
       where: { orderId },
       select: { productId: true, quantity: true },

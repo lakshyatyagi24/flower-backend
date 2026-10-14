@@ -19,6 +19,8 @@ export class CreateOrderDto {
   @IsString() @MaxLength(80) city!: string;
   @IsIndianPin() postalCode!: string;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
+  /** Optional coupon code (normalised server-side). The discount is always recomputed on the server. */
+  @IsOptional() @IsString() @MaxLength(64) couponCode?: string;
   @IsOptional() @IsIn(['COD', 'RAZORPAY']) paymentMethod?: 'COD' | 'RAZORPAY';
   /**
    * Requested delivery date, `YYYY-MM-DD` (an India/IST calendar date; a full timestamp is rejected).

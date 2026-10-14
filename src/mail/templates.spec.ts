@@ -15,6 +15,21 @@ describe('mail templates', () => {
     expect(html).toContain('₹1,249.00');
     expect(html).toContain('/track-order');
   });
+  it('shows a discount line only when a discount was applied, and escapes the code', () => {
+    const base = {
+      id: 3, total: 900, subtotal: 1000, shipping: 0, gst: 0, paymentMethod: 'COD',
+      customerName: 'A', shippingAddress: 'x', city: 'Delhi', postalCode: '110001',
+      items: [{ productName: 'Rose', quantity: 1, unitPrice: 1000 }],
+    } as any;
+    const withCoupon = orderPlacedHtml({ ...base, couponCode: 'SAVE10', discount: 100 }, 'https://s.test');
+    expect(withCoupon).toContain('Discount (SAVE10)');
+    expect(withCoupon).toContain('-₹100.00');
+    expect(orderPaidHtml({ ...base, couponCode: 'SAVE10', discount: 100 }, 'https://s.test')).toContain('Discount (SAVE10)');
+    expect(adminOrderHtml({ ...base, couponCode: 'SAVE10', discount: 100 }, 'https://a.test')).toContain('Discount (SAVE10)');
+    expect(orderPlacedHtml({ ...base, couponCode: null, discount: 0 }, 'https://s.test')).not.toContain('Discount');
+    expect(orderPlacedHtml(base, 'https://s.test')).not.toContain('Discount');
+    expect(orderPlacedHtml({ ...base, couponCode: '<b>x</b>', discount: 5 }, 'https://s.test')).not.toContain('<b>x</b>');
+  });
   it('escapes user-controlled strings in customer and admin templates', () => {
     const evil = '<script>alert(1)</script>';
     const order = {
