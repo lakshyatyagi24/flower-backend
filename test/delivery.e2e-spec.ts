@@ -160,7 +160,7 @@ describe('Delivery date (e2e)', () => {
     const before = await stock();
     const missing = await post();
     expect(missing.status).toBe(400);
-    expect(missing.body.message).toEqual(['Please choose a delivery date']);
+    expect(missing.body.message).toEqual(["Please choose a delivery date. If you don't see a date picker, please refresh the page."]);
     const stamp = await post(`${earliest}T00:00:00.000Z`);
     expect(stamp.status).toBe(400);
     expect(stamp.body.message).toEqual(['Delivery date must be a valid date in YYYY-MM-DD format']);

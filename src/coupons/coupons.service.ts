@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { round2 } from '../common/money';
-import { CouponLike, evaluateCoupon, normalizeCouponCode } from './coupon-rules';
+import { CouponLike, couponError, evaluateCoupon, FINISHED_MESSAGES, MIN_DISCOUNTED_TOTAL, normalizeCouponCode } from './coupon-rules';
 import { CreateCouponDto, UpdateCouponDto } from './dto/coupon.dto';
 
 type Shape = { type: 'PERCENT' | 'FLAT'; value: number; maxDiscount: number | null };
@@ -19,12 +19,26 @@ export class CouponsService {
     code: string,
     subtotal: number,
     db: { coupon: { findUnique: (a: any) => Promise<any> } } = this.prisma as any,
+    opts: { hideFinished?: boolean } = {},
   ) {
     const normalized = normalizeCouponCode(code);
     const coupon: CouponLike | null = normalized ? await db.coupon.findUnique({ where: { code: normalized } }) : null;
-    const discount = evaluateCoupon(coupon, subtotal);
+    let discount: number;
+    try {
+      discount = evaluateCoupon(coupon, subtotal);
+    } catch (err) {
+      // Public preview only: an expired or used-up code is reported like an unknown one, so strangers cannot probe
+      // which codes have existed. Order creation keeps the specific reasons (it is authoritative and throttled).
+      if (opts.hideFinished && FINISHED_MESSAGES.includes(String((err as { response?: { message?: string } }).response?.message))) {
+        throw couponError('Coupon not found');
+      }
+      throw err;
+    }
     return { discount, coupon: coupon! };
   }
+
+  /** The lowest total a discounted order may have (Razorpay needs at least one rupee). */
+  readonly minTotal = MIN_DISCOUNTED_TOTAL;
 
   list() {
     return this.prisma.coupon.findMany({ orderBy: { createdAt: 'desc' } });

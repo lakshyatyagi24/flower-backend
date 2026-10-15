@@ -154,10 +154,10 @@ describe('Coupons (e2e)', () => {
       const c = await mkCoupon('VAL', { value: 10, maxUses: 5, usedCount: 2 });
       const res = await http().post('/coupons/validate').send({ code: `  ${c.code.toLowerCase()} `, subtotal: 1000 });
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ code: c.code, type: 'PERCENT', value: 10, discount: 100 });
+      expect(res.body).toEqual({ code: c.code, type: 'PERCENT', value: 10, discount: 100, minTotal: 1 });
     });
 
-    it('unknown and inactive codes are indistinguishable; other errors keep their messages', async () => {
+    it('unknown, inactive, expired and used-up codes are indistinguishable in the public preview; the minimum-subtotal hint stays', async () => {
       const off = await mkCoupon('OFF', { active: false });
       const unknown = await http().post('/coupons/validate').send({ code: `${tag}NOPE`, subtotal: 1000 });
       const inactive = await http().post('/coupons/validate').send({ code: off.code, subtotal: 1000 });
@@ -166,9 +166,13 @@ describe('Coupons (e2e)', () => {
       expect(inactive.body).toEqual(unknown.body);
       expect(unknown.body.message).toBe('Coupon not found');
       const expired = await mkCoupon('EXP', { expiresAt: new Date('2020-01-01') });
-      expect((await http().post('/coupons/validate').send({ code: expired.code, subtotal: 1000 })).body.message).toBe('Coupon expired');
+      // The PUBLIC preview reports finished codes as unknown, so strangers cannot probe which codes have existed.
+      const expiredRes = await http().post('/coupons/validate').send({ code: expired.code, subtotal: 1000 });
+      expect(expiredRes.status).toBe(400);
+      expect(expiredRes.body).toEqual(unknown.body);
       const full = await mkCoupon('FULL', { maxUses: 1, usedCount: 1 });
-      expect((await http().post('/coupons/validate').send({ code: full.code, subtotal: 1000 })).body.message).toBe('Coupon usage limit reached');
+      const fullRes = await http().post('/coupons/validate').send({ code: full.code, subtotal: 1000 });
+      expect(fullRes.body).toEqual(unknown.body);
       const min = await mkCoupon('MIN', { minSubtotal: 1500 });
       expect((await http().post('/coupons/validate').send({ code: min.code, subtotal: 1000 })).body.message).toBe('Add ₹500 more to use this coupon');
     });

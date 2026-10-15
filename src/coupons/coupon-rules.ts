@@ -55,6 +55,9 @@ export function evaluateCoupon(c: CouponLike | null, subtotal: number, now: Date
   return computeDiscount(c, base);
 }
 
+/** Messages that tell a stranger a code exists but is finished; the public preview reports them as unknown. */
+export const FINISHED_MESSAGES = ['Coupon expired', 'Coupon usage limit reached'];
+
 export function belowMinimumTotalError(): BadRequestException {
   return couponError(
     `This coupon would bring your total below ₹${MIN_DISCOUNTED_TOTAL}. Add more items to use it.`,

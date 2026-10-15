@@ -29,7 +29,7 @@ export class CreateOrderDto {
    */
   @Matches(/^\d{4}-\d{2}-\d{2}$/, {
     // One message only: a missing value and a malformed one each get a single clear sentence.
-    message: (a) => (a.value === undefined || a.value === null || a.value === '' ? 'Please choose a delivery date' : 'Delivery date must be a valid date in YYYY-MM-DD format'),
+    message: (a) => (a.value === undefined || a.value === null || a.value === '' ? "Please choose a delivery date. If you don't see a date picker, please refresh the page." : 'Delivery date must be a valid date in YYYY-MM-DD format'),
   })
   deliveryDate!: string;
 }

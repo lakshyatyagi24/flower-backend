@@ -8,26 +8,30 @@ export interface TaxLine {
 }
 
 /**
- * Spread a coupon discount over the lines in proportion to their value. Every line but the last gets
- * round2(discount * line / subtotal); the last line takes the remainder, so the allocations add up to the discount
- * exactly (to the paisa) whatever the rounding did.
+ * Spread a coupon discount over the lines in proportion to their value, in whole paise so nothing drifts.
+ *
+ * Each line first gets floor(discount * line / subtotal). The few leftover paise (fewer than the number of lines)
+ * go to the LARGEST line (ties: the later one), and every share is clamped to [0, line value]: whatever does not
+ * fit on a line is passed on to the next largest line that still has room. So the shares always add up to the
+ * discount exactly (the discount itself is clamped to the subtotal), none is negative and none exceeds its line.
+ * Mirrored by the storefront (frontend/src/lib/coupon.ts); both are pinned by the same fixtures.
  */
 export function allocateDiscount(lineTotals: number[], discount: number): number[] {
-  const bases = lineTotals.map(round2);
-  const subtotal = bases.reduce((s, b) => s + b, 0);
-  if (!(discount > 0) || !(subtotal > 0) || bases.length === 0) return bases.map(() => 0);
-  const out: number[] = [];
-  let allocated = 0;
-  bases.forEach((b, i) => {
-    if (i === bases.length - 1) {
-      out.push(round2(discount - allocated));
-    } else {
-      const part = round2((discount * b) / subtotal);
-      out.push(part);
-      allocated += part;
-    }
-  });
-  return out;
+  const cents = lineTotals.map((l) => Math.max(Math.round(round2(l) * 100), 0));
+  const subtotal = cents.reduce((s, c) => s + c, 0);
+  const want = Math.min(Math.max(Math.round(round2(discount) * 100), 0), subtotal);
+  if (want === 0 || subtotal === 0) return cents.map(() => 0);
+
+  const share = cents.map((c) => Math.floor((want * c) / subtotal));
+  let left = want - share.reduce((s, x) => s + x, 0);
+  const order = cents.map((_, i) => i).sort((a, b) => cents[b] - cents[a] || b - a);
+  for (const i of order) {
+    if (left <= 0) break;
+    const add = Math.min(left, cents[i] - share[i]);
+    share[i] += add;
+    left -= add;
+  }
+  return share.map((s) => s / 100);
 }
 
 /**

@@ -1,0 +1,214 @@
+{
+  "allocations": [
+    {
+      "lines": [
+        333.33,
+        333.33,
+        333.34
+      ],
+      "discount": 100,
+      "shares": [
+        33.33,
+        33.33,
+        33.34
+      ]
+    },
+    {
+      "lines": [
+        100,
+        100,
+        100
+      ],
+      "discount": 10,
+      "shares": [
+        3.33,
+        3.33,
+        3.34
+      ]
+    },
+    {
+      "lines": [
+        1000
+      ],
+      "discount": 200,
+      "shares": [
+        200
+      ]
+    },
+    {
+      "lines": [
+        4181.78,
+        755.7,
+        3.34,
+        0
+      ],
+      "discount": 2749.95,
+      "shares": [
+        2327.5,
+        420.6,
+        1.85,
+        0
+      ]
+    },
+    {
+      "lines": [
+        0.01,
+        0.01,
+        0.01
+      ],
+      "discount": 0.02,
+      "shares": [
+        0,
+        0.01,
+        0.01
+      ]
+    },
+    {
+      "lines": [
+        250,
+        125.5,
+        99.99,
+        10
+      ],
+      "discount": 100,
+      "shares": [
+        51.51,
+        25.85,
+        20.59,
+        2.05
+      ]
+    },
+    {
+      "lines": [
+        500,
+        500
+      ],
+      "discount": 1000,
+      "shares": [
+        500,
+        500
+      ]
+    },
+    {
+      "lines": [
+        19.99,
+        5.01,
+        74.5
+      ],
+      "discount": 17.77,
+      "shares": [
+        3.57,
+        0.89,
+        13.31
+      ]
+    }
+  ],
+  "gst": [
+    {
+      "lines": [
+        {
+          "lineTotal": 1000,
+          "gstRate": 18
+        }
+      ],
+      "discount": 200,
+      "gst": [
+        144
+      ]
+    },
+    {
+      "lines": [
+        {
+          "lineTotal": 1000,
+          "gstRate": 18
+        }
+      ],
+      "discount": 0,
+      "gst": [
+        180
+      ]
+    },
+    {
+      "lines": [
+        {
+          "lineTotal": 500,
+          "gstRate": 0
+        },
+        {
+          "lineTotal": 500,
+          "gstRate": 18
+        }
+      ],
+      "discount": 100,
+      "gst": [
+        0,
+        81
+      ]
+    },
+    {
+      "lines": [
+        {
+          "lineTotal": 333.33,
+          "gstRate": 18
+        },
+        {
+          "lineTotal": 333.33,
+          "gstRate": 12
+        },
+        {
+          "lineTotal": 333.34,
+          "gstRate": 5
+        }
+      ],
+      "discount": 100,
+      "gst": [
+        54,
+        36,
+        15
+      ]
+    },
+    {
+      "lines": [
+        {
+          "lineTotal": 2000,
+          "gstRate": 5
+        }
+      ],
+      "discount": 150,
+      "gst": [
+        92.5
+      ]
+    },
+    {
+      "lines": [
+        {
+          "lineTotal": 4181.78,
+          "gstRate": 18
+        },
+        {
+          "lineTotal": 755.7,
+          "gstRate": 12
+        },
+        {
+          "lineTotal": 3.34,
+          "gstRate": 5
+        },
+        {
+          "lineTotal": 0,
+          "gstRate": 28
+        }
+      ],
+      "discount": 2749.95,
+      "gst": [
+        333.77,
+        40.21,
+        0.07,
+        0
+      ]
+    }
+  ],
+  "fuzz": {
+    "seed": 20261015,
+    "baskets": 4000
+  }
+}

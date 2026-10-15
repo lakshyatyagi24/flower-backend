@@ -14,14 +14,15 @@ function parseId(id: string): number {
 export class CouponsController {
   constructor(private readonly coupons: CouponsService) {}
 
-  // Public preview for the checkout. Tight per-IP limit: it is a code-guessing surface. Unknown and inactive
-  // codes get the same error. Returns only what the shopper needs, never usage counters or limits.
+  // Public preview for the checkout. Tight per-IP limit: it is a code-guessing surface. Unknown, inactive, expired and used-up
+  // codes all get the same "not found" here (order creation keeps the specific reasons). Returns only what the shopper needs, never usage counters or limits.
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @HttpCode(200)
   @Post('validate')
   async validate(@Body() body: ValidateCouponDto) {
-    const { discount, coupon } = await this.coupons.validate(body.code, body.subtotal);
-    return { code: coupon.code, type: coupon.type, value: coupon.value, discount };
+    const { discount, coupon } = await this.coupons.validate(body.code, body.subtotal, undefined, { hideFinished: true });
+    // minTotal: the checkout blocks an order whose total (after discount, shipping and GST) would be below it.
+    return { code: coupon.code, type: coupon.type, value: coupon.value, discount, minTotal: this.coupons.minTotal };
   }
 
   @UseGuards(JwtAuthGuard)

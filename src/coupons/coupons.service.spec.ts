@@ -39,6 +39,20 @@ describe('CouponsService.validate', () => {
     await expect(make(row({ maxUses: 1, usedCount: 1 })).svc.validate('SAVE10', 500)).rejects.toThrow('Coupon usage limit reached');
     await expect(make(row({ minSubtotal: 800 })).svc.validate('SAVE10', 500)).rejects.toThrow('Add ₹300 more to use this coupon');
   });
+  it('public preview (hideFinished) reports expired and used-up codes as not found; order creation keeps the reasons', async () => {
+    const hide = { hideFinished: true };
+    const expired = make(row({ expiresAt: new Date('2020-01-01') }));
+    await expect(expired.svc.validate('SAVE10', 500, undefined, hide)).rejects.toThrow('Coupon not found');
+    await expect(expired.svc.validate('SAVE10', 500)).rejects.toThrow('Coupon expired');
+    const full = make(row({ maxUses: 1, usedCount: 1 }));
+    await expect(full.svc.validate('SAVE10', 500, undefined, hide)).rejects.toThrow('Coupon not found');
+    await expect(full.svc.validate('SAVE10', 500)).rejects.toThrow('Coupon usage limit reached');
+    // the minimum-subtotal hint is still given (the shopper needs it)
+    await expect(make(row({ minSubtotal: 800 })).svc.validate('SAVE10', 500, undefined, hide)).rejects.toThrow('Add ₹300 more');
+  });
+  it('exposes the discounted-total floor', () => {
+    expect(make().svc.minTotal).toBe(1);
+  });
   it('can validate against a transaction client', async () => {
     const tx: any = { coupon: { findUnique: jest.fn(async () => row({ type: 'FLAT', value: 40 })) } };
     expect((await make().svc.validate('save10', 500, tx)).discount).toBe(40);
