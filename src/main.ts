@@ -12,6 +12,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { applyBodyParsers } from './common/body-parsers';
 import { assertJwtSecret } from './auth/jwt.util';
 import { parseTrustProxy } from './common/trust-proxy';
+import { buildCorsOrigins } from './common/cors-origins';
 
 async function bootstrap() {
   // Fail fast at startup if auth is misconfigured, rather than booting with a
@@ -31,22 +32,8 @@ async function bootstrap() {
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
   );
 
-  const extraOrigins = (process.env.CORS_ORIGINS ?? process.env.CORS_ORIGIN ?? '')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean);
-
   app.enableCors({
-    origin: [
-      'http://localhost:3000',
-      'http://127.0.0.1:3000',
-      'http://localhost:3002',
-      'http://127.0.0.1:3002',
-      'https://freshpetalsindia.com',
-      'https://www.freshpetalsindia.com',
-      'https://admin.freshpetalsindia.com',
-      ...extraOrigins,
-    ],
+    origin: buildCorsOrigins(process.env.NODE_ENV, process.env.CORS_ORIGINS ?? process.env.CORS_ORIGIN),
     credentials: true,
   });
 
