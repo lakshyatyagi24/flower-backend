@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SETTING_DEFAULTS } from './setting-defaults';
+import { isSecretSettingKey } from './secret-keys';
 import { findInvalidPincodeTokens } from '../delivery/pincode-rules';
 import {
   countBlackoutTokens,
@@ -21,6 +22,8 @@ export class SettingsService {
     const rows = await this.prisma.setting.findMany();
     const result: Record<string, string> = { ...DEFAULTS };
     for (const r of rows) result[r.key] = r.value;
+    // Defence in depth: credential-looking rows (e.g. left over from the original seed) are never serialised.
+    for (const k of Object.keys(result)) if (isSecretSettingKey(k)) delete result[k];
     return result;
   }
 
@@ -58,6 +61,9 @@ export class SettingsService {
     }
     for (const [k, v] of Object.entries(values)) {
       if (!k || k.length > 128) throw new BadRequestException(`Invalid setting key "${k.slice(0, 40)}"`);
+      if (isSecretSettingKey(k)) {
+        throw new BadRequestException(`Setting "${k.slice(0, 40)}" looks like a credential. Secrets are configured in the server environment, not in Settings.`);
+      }
       if (typeof v !== 'string') throw new BadRequestException(`Setting "${k}" must be a string`);
       if (v.length > 20000) throw new BadRequestException(`Setting "${k}" is too long`);
     }

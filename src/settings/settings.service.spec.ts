@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { SettingsService } from './settings.service';
 import { SETTING_DEFAULTS } from './setting-defaults';
+import { isSecretSettingKey } from './secret-keys';
 
 const make = (rows: { key: string; value: string }[] = []) =>
   new SettingsService({ setting: { findMany: jest.fn(async () => rows) } } as any);
@@ -124,5 +125,51 @@ describe('SettingsService.upsert blackout date count', () => {
     expect(upsert).toHaveBeenCalledTimes(1);
     await expect(svc.upsert({ 'delivery.blackoutDates': dates(367) })).rejects.toThrow(/too many entries.*366/);
     expect(upsert).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('credential-looking settings keys (Task 5.7)', () => {
+  const secretRows = [
+    { key: 'payment.razorpayKeyId', value: 'rzp_FAKE_SHOULDNOTLEAK' },
+    { key: 'payment.razorpayKeySecret', value: 'SHOULDNOTLEAK' },
+    { key: 'payment.stripeKey', value: 'SHOULDNOTLEAK' },
+    { key: 'payment.anything', value: 'SHOULDNOTLEAK' },
+    { key: 'store.apiToken', value: 'SHOULDNOTLEAK' },
+    { key: 'delivery.smsApiKey', value: 'SHOULDNOTLEAK' },
+    { key: 'seo.clientSecret', value: 'SHOULDNOTLEAK' },
+    { key: 'policies.adminPassword', value: 'SHOULDNOTLEAK' },
+    { key: 'store.name', value: 'Shop' },
+  ];
+
+  it('getAll (admin) and getPublic never return them, even when rows exist in the table', async () => {
+    const svc = make(secretRows);
+    for (const out of [await svc.getAll(), await svc.getPublic()]) {
+      expect(JSON.stringify(out)).not.toContain('SHOULDNOTLEAK');
+      expect(Object.keys(out).filter((k) => isSecretSettingKey(k))).toEqual([]);
+      expect(out['store.name']).toBe('Shop');
+    }
+  });
+
+  it('upsert rejects writes to them and writes nothing', async () => {
+    const upsert = jest.fn();
+    const svc = new SettingsService({ setting: { upsert, findMany: jest.fn(async () => []) }, $transaction: jest.fn() } as any);
+    for (const key of ['payment.razorpayKeySecret', 'Payment.Stripe', 'store.apiKey', 'x.TOKEN', 'a.password']) {
+      await expect(svc.upsert({ 'store.name': 'ok', [key]: 'v' })).rejects.toThrow(/credential/);
+    }
+    expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('does not flag every legitimate default key', () => {
+    for (const k of Object.keys(SETTING_DEFAULTS)) expect(isSecretSettingKey(k)).toBe(false);
+    for (const k of ['homepage.announcement', 'trust.item1', 'seo.title', 'delivery.cutoffTime', 'store.whatsapp']) {
+      expect(isSecretSettingKey(k)).toBe(false);
+    }
+  });
+
+  it('the cleanup script classifies keys exactly like the service', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const script = require('../../prisma/cleanup-secret-settings.js');
+    const samples = ['payment.x', 'payment', 'paymentTerms', 'store.name', 'a.key', 'a.KEY ', 'x.secret', 'seo.token', 'p.password', 'monkey.business', 'homepage.hero'];
+    for (const s of samples) expect(script.isSecretSettingKey(s)).toBe(isSecretSettingKey(s));
   });
 });

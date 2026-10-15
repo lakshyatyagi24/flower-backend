@@ -12,7 +12,7 @@ export class SettingsController {
     return this.settings.getPublic();
   }
 
-  // Admin only — full settings including secrets
+  // Admin only — every non-credential setting (credential-looking keys are never returned)
   @UseGuards(JwtAuthGuard)
   @Roles('ADMIN')
   @Get('admin')
