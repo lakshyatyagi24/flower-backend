@@ -1,4 +1,6 @@
 import {
+  Inject,
+  Optional,
   BadRequestException,
   ConflictException,
   Injectable,
@@ -9,6 +11,7 @@ import { normalizeIndianPhone } from '../common/validators';
 import { createHash, randomBytes } from 'crypto';
 import { MailService } from '../mail/mail.service';
 import { hashPassword, signJwt, verifyPassword } from './jwt.util';
+import { RESET_TOKEN_SINK, type ResetTokenSink } from '../test-support/reset-token-sink';
 
 interface RegisterInput {
   email: string;
@@ -24,7 +27,12 @@ interface LoginInput {
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService, private readonly mail: MailService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mail: MailService,
+    // Only provided when TestSupportModule is loaded (NODE_ENV=test + ENABLE_TEST_ENDPOINTS=1).
+    @Optional() @Inject(RESET_TOKEN_SINK) private readonly resetTokenSink?: ResetTokenSink,
+  ) {}
 
   private static readonly RESET_TTL_MS = 60 * 60 * 1000;
 
@@ -94,6 +102,7 @@ export class AuthService {
     await this.prisma.passwordResetToken.create({
       data: { userId: user.id, tokenHash: this.hashToken(raw), expiresAt: new Date(Date.now() + AuthService.RESET_TTL_MS) },
     });
+    this.resetTokenSink?.record(user.email, raw);
     const base = (
       user.role === 'ADMIN'
         ? (process.env.ADMIN_SITE_URL || 'http://localhost:3002')

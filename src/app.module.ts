@@ -17,6 +17,7 @@ import { NewsletterModule } from './newsletter/newsletter.module';
 import { PaymentsModule } from './payments/payments.module';
 import { DeliveryModule } from './delivery/delivery.module';
 import { CouponsModule } from './coupons/coupons.module';
+import { testSupportModules } from './test-support/test-support.env';
 
 @Module({
   imports: [
@@ -36,6 +37,8 @@ import { CouponsModule } from './coupons/coupons.module';
     PaymentsModule,
     DeliveryModule,
     CouponsModule,
+    // Test-only endpoints: [] unless NODE_ENV=test and ENABLE_TEST_ENDPOINTS=1; throws in production if the flag is set.
+    ...testSupportModules(),
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
