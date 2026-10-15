@@ -831,3 +831,118 @@ describe('OrdersService shipping settings fallback', () => {
     expect((await run({ 'shipping.freeThreshold': '' }, 50)).shipping).toBe(99);
   });
 });
+
+describe('OrdersService.create: cart and money edge cases', () => {
+  function withProducts(rows: Array<Record<string, unknown>>) {
+    const f = makeFakes();
+    f.prisma.product.findMany.mockResolvedValue(
+      rows.map((r) => ({ price: 100, stock: 10, active: true, saleMode: 'PURCHASE', gstRate: 0, minOrderQty: 1, ...r })),
+    );
+    const tx: any = {
+      product: { updateMany: jest.fn(async () => ({ count: 1 })) },
+      order: { create: jest.fn(async ({ data }: any) => ({ id: 9, ...data, items: [] })) },
+    };
+    f.prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+    return { ...f, tx };
+  }
+
+  it('refuses an unknown product id without opening a transaction', async () => {
+    const { svc, prisma } = withProducts([]);
+    await expect(svc.create(null, input)).rejects.toThrow('One or more products are unavailable');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses the same product on two lines (cannot dodge the per-line stock/minimum checks)', async () => {
+    const { svc, prisma } = withProducts([{ id: 1, name: 'Rose', stock: 3 }]);
+    const dup = { ...input, items: [{ productId: 1, quantity: 2 }, { productId: 1, quantity: 2 }] };
+    await expect(svc.create(null, dup)).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses an inactive product and names it', async () => {
+    const { svc, prisma } = withProducts([{ id: 1, name: 'Old Rose', active: false }]);
+    await expect(svc.create(null, input)).rejects.toThrow('Product "Old Rose" is not available');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('refuses an enquiry-only product (it has no purchasable price)', async () => {
+    const { svc, prisma } = withProducts([{ id: 1, name: 'Wedding Arch', saleMode: 'ENQUIRY' }]);
+    await expect(svc.create(null, input)).rejects.toThrow('enquiry-only');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('floors a fractional quantity and treats 0 as 1; the charged amount follows the floored quantity', async () => {
+    const { svc, tx } = withProducts([{ id: 1, name: 'Rose', price: 100 }]);
+    await svc.create(null, { ...input, items: [{ productId: 1, quantity: 2.9 }] });
+    const data = tx.order.create.mock.calls[0][0].data;
+    expect(data.items.create[0].quantity).toBe(2);
+    expect(data.subtotal).toBe(200);
+    expect(tx.product.updateMany).toHaveBeenCalledWith({
+      where: { id: 1, stock: { gte: 2 } },
+      data: { stock: { decrement: 2 } },
+    });
+    tx.order.create.mockClear();
+    await svc.create(null, { ...input, items: [{ productId: 1, quantity: 0 }] });
+    expect(tx.order.create.mock.calls[0][0].data.items.create[0].quantity).toBe(1);
+  });
+
+  it('claims stock for every line and rejects with the product name when the atomic claim loses', async () => {
+    const { svc, tx } = withProducts([{ id: 1, name: 'Rose' }, { id: 2, name: 'Lily' }]);
+    tx.product.updateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+    const two = { ...input, items: [{ productId: 1, quantity: 1 }, { productId: 2, quantity: 1 }] };
+    await expect(svc.create(null, two)).rejects.toThrow('"Lily" just went out of stock');
+    expect(tx.order.create).not.toHaveBeenCalled();
+  });
+
+  it('a signed-in buyer\'s order is bound to the ACCOUNT email, not the email typed at checkout', async () => {
+    const { svc, prisma, tx } = withProducts([{ id: 1, name: 'Rose' }]);
+    prisma.user.findUnique.mockResolvedValue({ email: ' Owner@Example.com ' });
+    await svc.create(7, { ...input, customerEmail: 'someone-else@x.com' });
+    const data = tx.order.create.mock.calls[0][0].data;
+    expect(data.userId).toBe(7);
+    expect(data.customerEmail).toBe('owner@example.com');
+  });
+
+  it('a guest order keeps the trimmed, lowercased checkout email and a null userId', async () => {
+    const { svc, prisma, tx } = withProducts([{ id: 1, name: 'Rose' }]);
+    await svc.create(null, { ...input, customerEmail: '  Guest@X.COM ' });
+    const data = tx.order.create.mock.calls[0][0].data;
+    expect(data.userId).toBeNull();
+    expect(data.customerEmail).toBe('guest@x.com');
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('rejects whitespace-only name or address before any lookup', async () => {
+    const { svc, prisma } = withProducts([{ id: 1 }]);
+    await expect(svc.create(null, { ...input, customerName: '   ' })).rejects.toThrow('Customer name is required');
+    await expect(svc.create(null, { ...input, shippingAddress: ' ' })).rejects.toThrow('Shipping address is required');
+    expect(prisma.product.findMany).not.toHaveBeenCalled();
+  });
+
+  it('applies GST per line on the price and charges flat shipping below the free threshold', async () => {
+    const { svc, tx } = withProducts([{ id: 1, name: 'Rose', price: 100, gstRate: 18 }]);
+    await svc.create(null, { ...input, items: [{ productId: 1, quantity: 2 }] });
+    const data = tx.order.create.mock.calls[0][0].data;
+    // defaults: flat 99 shipping, free from 1499. subtotal 200, GST 18% = 36.
+    expect(data.subtotal).toBe(200);
+    expect(data.gst).toBe(36);
+    expect(data.shipping).toBe(99);
+    expect(data.total).toBe(335);
+  });
+});
+
+describe('OrdersService.track', () => {
+  it('matches the email case- and whitespace-insensitively', async () => {
+    const { svc } = makeFakes();
+    await expect(svc.track(5, '  C@X.com ')).resolves.toMatchObject({ id: 5 });
+  });
+
+  it('gives the same generic 404 for a wrong email, a missing email and an unknown order', async () => {
+    const { svc, prisma } = makeFakes();
+    const msg = 'Order not found, or the email does not match this order';
+    await expect(svc.track(5, 'other@x.com')).rejects.toThrow(msg);
+    await expect(svc.track(5, '')).rejects.toThrow(msg);
+    prisma.order.findUnique.mockResolvedValue(null);
+    await expect(svc.track(999, 'c@x.com')).rejects.toThrow(msg);
+  });
+});

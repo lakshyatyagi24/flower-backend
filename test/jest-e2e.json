@@ -4,6 +4,7 @@
   "testEnvironment": "node",
   "setupFiles": ["dotenv/config"],
   "testRegex": ".e2e-spec.ts$",
+  "maxWorkers": 1,
   "transform": {
     "^.+\\.(t|j)s$": ["ts-jest", { "tsconfig": "<rootDir>/tsconfig.e2e.json" }]
   }
