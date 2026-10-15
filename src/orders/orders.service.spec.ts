@@ -636,6 +636,7 @@ describe('OrdersService.listAll / stats payment filters', () => {
     const findMany = jest.fn(async (_a?: any) => []);
     const prisma: any = {
       order: { findMany, count, aggregate: jest.fn(async () => ({ _sum: { total: 0 } })) },
+      $queryRaw: jest.fn(async () => []),
       product: { count: jest.fn(async () => 0) },
       user: { count: jest.fn(async () => 0) },
       enquiry: { count: jest.fn(async () => 0) },

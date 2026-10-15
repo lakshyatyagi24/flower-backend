@@ -1,18 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
-
-function csvField(value: string): string {
-  // Neutralise spreadsheet formula injection, then RFC-4180 quote if needed.
-  let v = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
-  if (/[",\r\n]/.test(v)) v = `"${v.replace(/"/g, '""')}"`;
-  return v;
-}
+import { csvCell } from '../common/csv';
 
 export function toCsv(rows: Array<{ email: string; source: string; createdAt: Date }>): string {
   return [
     'email,source,createdAt',
-    ...rows.map((r) => [r.email, r.source, r.createdAt.toISOString()].map(csvField).join(',')),
+    ...rows.map((r) => [r.email, r.source, r.createdAt.toISOString()].map(csvCell).join(',')),
   ].join('\n');
 }
 

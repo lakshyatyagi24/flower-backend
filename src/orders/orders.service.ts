@@ -19,6 +19,18 @@ import {
   belowMinimumTotalError, couponError, evaluateCoupon, MIN_DISCOUNTED_TOTAL, normalizeCouponCode,
 } from '../coupons/coupon-rules';
 import { gstPerLine } from '../coupons/discount-tax';
+import { buildOrderSearchWhere, resolveDayRange, zeroFillSeries } from './orders-query';
+import { EXPORT_ROW_CAP, exportFilename, ordersToCsv, type ExportOrder } from './orders-csv';
+
+export interface OrderListFilters {
+  status?: string;
+  paymentStatus?: string;
+  paymentMethod?: string;
+  attention?: string;
+  sort?: string;
+  /** Free-text admin search: order id, customer email / name / phone. */
+  q?: string;
+}
 
 interface OrderItemInput {
   productId: number;
@@ -389,7 +401,11 @@ export class OrdersService {
     return publicOrder;
   }
 
-  async listAll(params: { status?: string; paymentStatus?: string; paymentMethod?: string; attention?: string; sort?: string; take?: number; skip?: number }) {
+  /**
+   * ONE place that turns the admin list filters into a Prisma `where`; the paginated list and the CSV export
+   * both use it so they can never disagree about which orders match.
+   */
+  private buildListWhere(params: OrderListFilters): { where: Record<string, unknown>; upcoming: boolean } {
     const where: Record<string, unknown> = {};
     if (params.status && (ALLOWED_STATUSES as readonly string[]).includes(params.status)) {
       where.status = params.status;
@@ -400,13 +416,22 @@ export class OrdersService {
     if (params.paymentMethod && (PAYMENT_METHODS as readonly string[]).includes(params.paymentMethod)) {
       where.paymentMethod = params.paymentMethod;
     }
+    const and: Record<string, unknown>[] = [];
     if (params.attention && Object.prototype.hasOwnProperty.call(ATTENTION_WHERE, params.attention)) {
-      where.AND = [ATTENTION_WHERE[params.attention as AttentionKey]];
+      and.push(ATTENTION_WHERE[params.attention as AttentionKey]);
     }
+    const search = buildOrderSearchWhere(params.q);
+    if (search) and.push(search);
+    if (and.length) where.AND = and;
     // "Upcoming deliveries": only orders due today (India date) or later, soonest first, so a long history of
     // past deliveries can never push upcoming ones out of the 200-row page.
     const upcoming = params.sort === 'deliveryDate';
     if (upcoming) where.deliveryDate = { gte: toStoredDate(istNow(new Date()).date) };
+    return { where, upcoming };
+  }
+
+  async listAll(params: OrderListFilters & { take?: number; skip?: number }) {
+    const { where, upcoming } = this.buildListWhere(params);
     const take = Math.min(Math.max(params.take ?? 50, 1), 200);
     const skip = Math.max(params.skip ?? 0, 0);
     const [items, total] = await Promise.all([
@@ -420,6 +445,33 @@ export class OrdersService {
       this.prisma.order.count({ where }),
     ]);
     return { items, total, take, skip };
+  }
+
+  /** CSV of the orders matching the SAME filters as the list, newest first (or soonest delivery), capped. */
+  async exportCsv(params: OrderListFilters, now: Date = new Date()) {
+    const { where, upcoming } = this.buildListWhere(params);
+    const [rows, total] = await Promise.all([
+      this.prisma.order.findMany({
+        where,
+        select: {
+          id: true, createdAt: true, status: true, paymentMethod: true, paymentStatus: true,
+          customerName: true, customerEmail: true, customerPhone: true, city: true, postalCode: true,
+          deliveryDate: true, subtotal: true, discount: true, couponCode: true, shipping: true, gst: true,
+          total: true, trackingNumber: true, courierName: true,
+          items: { select: { productName: true, quantity: true }, orderBy: { id: 'asc' } },
+        },
+        orderBy: upcoming ? [{ deliveryDate: 'asc' }, { createdAt: 'desc' }] : { createdAt: 'desc' },
+        take: EXPORT_ROW_CAP,
+      }),
+      this.prisma.order.count({ where }),
+    ]);
+    return {
+      csv: ordersToCsv(rows as ExportOrder[]),
+      filename: exportFilename(now),
+      exported: rows.length,
+      total,
+      truncated: total > rows.length,
+    };
   }
 
   async getOne(id: number) {
@@ -605,8 +657,9 @@ export class OrdersService {
     return updated;
   }
 
-  async stats() {
-    const [orderCount, productCount, customerCount, totalAgg, recentOrders, openEnquiries, unpaidOnline, refundsDue, mismatches] = await Promise.all([
+  async stats(range?: { from?: unknown; to?: unknown }, now: Date = new Date()) {
+    const dayRange = resolveDayRange(range?.from, range?.to, now);
+    const [orderCount, productCount, customerCount, totalAgg, recentOrders, openEnquiries, unpaidOnline, refundsDue, mismatches, seriesRows] = await Promise.all([
       this.prisma.order.count(),
       this.prisma.product.count(),
       this.prisma.user.count({ where: { role: 'CUSTOMER' } }),
@@ -634,6 +687,7 @@ export class OrdersService {
       this.prisma.order.count({ where: ATTENTION_WHERE.awaiting }),
       this.prisma.order.count({ where: ATTENTION_WHERE.refund }),
       this.prisma.order.count({ where: ATTENTION_WHERE.mismatch }),
+      this.dailySeriesRows(dayRange.fromUtc, dayRange.toUtcExclusive),
     ]);
     return {
       orderCount,
@@ -645,6 +699,33 @@ export class OrdersService {
       unpaidOnline,
       refundsDue,
       mismatches,
+      range: { from: dayRange.from, to: dayRange.to },
+      series: zeroFillSeries(dayRange.days, seriesRows, round2),
     };
+  }
+
+  /**
+   * Orders and revenue per IST calendar day in [fromUtc, toUtcExclusive) in ONE grouped query.
+   * "createdAt" is a UTC `timestamp` (no zone), so adding the fixed +05:30 offset (India has no DST) and
+   * casting to date gives the IST day; the range bounds are IST midnights expressed in UTC. The bounds are
+   * passed as explicit-UTC timestamptz and converted with AT TIME ZONE 'UTC' so the comparison never depends
+   * on the database session's TimeZone setting (a bare Date parameter would be read in the session zone).
+   *  - orders: every order PLACED that day except CANCELLED
+   *  - revenue: the SAME definition as the all-time `revenue` total in stats(): not CANCELLED, not REFUNDED,
+   *    and either cash on delivery or actually PAID online (attributed to the day the order was placed)
+   */
+  private dailySeriesRows(fromUtc: Date, toUtcExclusive: Date) {
+    return this.prisma.$queryRaw<{ date: string; orders: number; revenue: number | null }[]>`
+      SELECT to_char(("createdAt" + interval '330 minutes')::date, 'YYYY-MM-DD') AS date,
+             COUNT(*)::int AS orders,
+             SUM("total") FILTER (
+               WHERE "paymentStatus" <> 'REFUNDED' AND ("paymentMethod" = 'COD' OR "paymentStatus" = 'PAID')
+             )::float8 AS revenue
+        FROM "Order"
+       WHERE "createdAt" >= (${fromUtc.toISOString()}::timestamptz AT TIME ZONE 'UTC')
+         AND "createdAt" < (${toUtcExclusive.toISOString()}::timestamptz AT TIME ZONE 'UTC')
+         AND "status" <> 'CANCELLED'
+       GROUP BY 1
+    `;
   }
 }

@@ -9,9 +9,11 @@ import {
   Put,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import type { Response } from 'express';
 import { OrdersService } from './orders.service';
 import { CurrentUser, JwtAuthGuard, OptionalJwtAuthGuard, Roles } from '../auth/auth.guard';
 import { JwtPayload } from '../auth/jwt.util';
@@ -23,6 +25,19 @@ import { TrackOrderDto } from './dto/track-order.dto';
 
 // GET and POST tracking share ONE bucket per client, so the combined limit is 20/min.
 const TRACK_BUCKET = (_ctx: unknown, tracker: string, name: string) => `order-track-${name}-${tracker}`;
+
+/** Query params arrive as string | string[] | object; only plain strings are honoured. */
+function listFilters(raw: Record<string, unknown>) {
+  const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
+  return {
+    status: str(raw.status),
+    paymentStatus: str(raw.paymentStatus),
+    paymentMethod: str(raw.paymentMethod),
+    attention: str(raw.attention),
+    sort: str(raw.sort),
+    q: str(raw.q),
+  };
+}
 
 @Controller('orders')
 export class OrdersController {
@@ -98,25 +113,48 @@ export class OrdersController {
     @Query('paymentMethod') paymentMethod?: string,
     @Query('attention') attention?: string,
     @Query('sort') sort?: string,
+    @Query('q') q?: string,
     @Query('take') take?: string,
     @Query('skip') skip?: string,
   ) {
     return this.orders.listAll({
-      status: typeof status === 'string' ? status : undefined,
-      paymentStatus: typeof paymentStatus === 'string' ? paymentStatus : undefined,
-      paymentMethod: typeof paymentMethod === 'string' ? paymentMethod : undefined,
-      attention: typeof attention === 'string' ? attention : undefined,
-      sort: typeof sort === 'string' ? sort : undefined,
+      ...listFilters({ status, paymentStatus, paymentMethod, attention, sort, q }),
       take: take ? parseInt(take, 10) : undefined,
       skip: skip ? parseInt(skip, 10) : undefined,
     });
   }
 
+  // CSV export of the orders matching the SAME filters as the list (declared before ':id'). Capped; when the
+  // result is truncated the response carries X-Export-Truncated: true plus the counts, so the admin UI can say so.
+  @UseGuards(JwtAuthGuard)
+  @Roles('ADMIN')
+  @Get('export.csv')
+  async exportCsv(
+    @Res({ passthrough: true }) res: Response,
+    @Query('status') status?: string,
+    @Query('paymentStatus') paymentStatus?: string,
+    @Query('paymentMethod') paymentMethod?: string,
+    @Query('attention') attention?: string,
+    @Query('sort') sort?: string,
+    @Query('q') q?: string,
+  ) {
+    const out = await this.orders.exportCsv(listFilters({ status, paymentStatus, paymentMethod, attention, sort, q }));
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${out.filename}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Export-Total', String(out.total));
+    res.setHeader('X-Export-Rows', String(out.exported));
+    res.setHeader('X-Export-Truncated', out.truncated ? 'true' : 'false');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, X-Export-Total, X-Export-Rows, X-Export-Truncated');
+    return out.csv;
+  }
+
+  // Dashboard numbers. from/to (IST dates, YYYY-MM-DD, max 366 days, default last 30) only affect `series`.
   @UseGuards(JwtAuthGuard)
   @Roles('ADMIN')
   @Get('stats')
-  async stats() {
-    return this.orders.stats();
+  async stats(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.orders.stats({ from, to });
   }
 
   @UseGuards(JwtAuthGuard)
