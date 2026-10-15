@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./dist",
+    "incremental": false,
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["scripts/migrate-images.ts"],
+  "exclude": ["node_modules", "dist", "**/*.spec.ts"]
+}
