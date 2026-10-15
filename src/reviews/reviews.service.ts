@@ -138,25 +138,55 @@ export class ReviewsService {
     return { canReview, hasReview: !!existing };
   }
 
-  private async notifyPending(
-    review: { id: number; rating: number; title: string | null; body: string; productId: number; user: { name: string | null } },
-    edited: boolean,
-  ) {
-    try {
-      const product = await this.prisma.product.findUnique({ where: { id: review.productId }, select: { name: true } });
-      await this.mail.sendReviewPending({
-        id: review.id,
-        productName: product?.name ?? `Product #${review.productId}`,
-        rating: review.rating,
-        title: review.title,
-        body: review.body,
-        authorName: review.user?.name ?? null,
-        edited,
-      });
-    } catch (e) {
-      // A mail problem must never fail the customer's request.
-      this.log.error(`review pending notification failed for review ${review.id}: ${(e as Error)?.message ?? String(e)}`);
+  /** userId -> time of the last review email sent for them (in memory; resets on restart). */
+  private readonly lastNotified = new Map<number, number>();
+  static readonly NOTIFY_COOLDOWN_MS = 10 * 60_000;
+  private static readonly NOTIFY_MAP_MAX = 1000;
+
+  /** True (and records it) when this user has not triggered a review email in the cooldown window. */
+  private takeNotifySlot(userId: number): boolean {
+    const now = Date.now();
+    const last = this.lastNotified.get(userId);
+    if (last !== undefined && now - last < ReviewsService.NOTIFY_COOLDOWN_MS) return false;
+    if (this.lastNotified.size >= ReviewsService.NOTIFY_MAP_MAX) {
+      for (const [k, t] of this.lastNotified) {
+        if (now - t >= ReviewsService.NOTIFY_COOLDOWN_MS) this.lastNotified.delete(k);
+      }
+      // Still full of recent entries: drop the oldest (Map keeps insertion order).
+      while (this.lastNotified.size >= ReviewsService.NOTIFY_MAP_MAX) {
+        this.lastNotified.delete(this.lastNotified.keys().next().value as number);
+      }
     }
+    this.lastNotified.delete(userId); // re-insert so insertion order tracks recency
+    this.lastNotified.set(userId, now);
+    return true;
+  }
+
+  /**
+   * Fire-and-forget admin email. Called only when a review is new or moves into PENDING from another status,
+   * and at most once per user per 10 minutes. Never throws and is never awaited by the request.
+   */
+  private notifyPending(
+    review: { id: number; userId: number; rating: number; title: string | null; body: string; productId: number; user: { name: string | null } },
+    edited: boolean,
+  ): void {
+    if (!this.takeNotifySlot(review.userId)) return;
+    void (async () => {
+      try {
+        const product = await this.prisma.product.findUnique({ where: { id: review.productId }, select: { name: true } });
+        await this.mail.sendReviewPending({
+          id: review.id,
+          productName: product?.name ?? `Product #${review.productId}`,
+          rating: review.rating,
+          title: review.title,
+          body: review.body,
+          authorName: review.user?.name ?? null,
+          edited,
+        });
+      } catch (e) {
+        this.log.error(`review pending notification failed for review ${review.id}: ${(e as Error)?.message ?? String(e)}`);
+      }
+    })();
   }
 
   async upsertForProduct(productId: number, userId: number, input: UpsertReviewInput) {
@@ -189,7 +219,7 @@ export class ReviewsService {
       update: { ...data, status: 'PENDING' },
       select: this.select,
     });
-    await this.notifyPending(saved, !!existing);
+    if (!existing || existing.status !== 'PENDING') this.notifyPending(saved, !!existing);
     return saved;
   }
 
@@ -225,7 +255,7 @@ export class ReviewsService {
       data: requeue ? { ...data, status: 'PENDING' } : data,
       select: this.select,
     });
-    if (requeue) await this.notifyPending(saved, true);
+    if (requeue && existing.status !== 'PENDING') this.notifyPending(saved, true);
     return saved;
   }
 
@@ -261,7 +291,8 @@ export class ReviewsService {
     const [items, total, groups] = await Promise.all([
       this.prisma.review.findMany({
         where,
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        // Pending queue is worked oldest-first so the longest-waiting review is never pushed past the page cap.
+        orderBy: params.status === 'PENDING' ? [{ createdAt: 'asc' }, { id: 'asc' }] : [{ createdAt: 'desc' }, { id: 'desc' }],
         select: this.adminSelect,
         take,
         skip,

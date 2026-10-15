@@ -49,6 +49,8 @@ function makeService(opts: { orders?: Array<{ userId: number; status: string; pr
   return { svc: new ReviewsService(prisma, mail), prisma, mail, reviews };
 }
 
+const flush = () => new Promise<void>((r) => setImmediate(r));
+
 const row = (o: Partial<Row>): Row => ({ id: 1, productId: 7, userId: 1, rating: 5, title: null, body: 'Lovely flowers indeed', status: 'APPROVED', createdAt: new Date(), updatedAt: new Date(), ...o });
 const input = { rating: 5, title: 'Great', body: 'Lovely fresh flowers!' };
 
@@ -99,6 +101,7 @@ describe('ReviewsService edit semantics', () => {
     const { svc, mail } = makeService({ orders: bought, reviews: [row({ status: 'APPROVED' })] });
     const r = await svc.upsertForProduct(7, 1, { rating: 4, title: null, body: 'Changed my mind about these' });
     expect(r.status).toBe('PENDING');
+    await flush();
     expect(mail.sendReviewPending).toHaveBeenCalledWith(expect.objectContaining({ edited: true }));
   });
   it('re-submitting identical content keeps status and sends no mail', async () => {
@@ -117,6 +120,7 @@ describe('ReviewsService edit semantics', () => {
     expect(reviews[0].status).toBe('APPROVED');
     await svc.update(5, 1, 'CUSTOMER', { rating: 2 });
     expect(reviews[0].status).toBe('PENDING');
+    await flush();
     expect(mail.sendReviewPending).toHaveBeenCalledTimes(1);
   });
   it('an admin correcting a different user review keeps its status', async () => {
@@ -197,7 +201,79 @@ describe('ReviewsService mail failure isolation', () => {
     const err = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     const { svc } = makeService({ orders: [{ userId: 1, status: 'COMPLETED', productIds: [7] }], mailThrows: true });
     await expect(svc.upsertForProduct(7, 1, input)).resolves.toMatchObject({ status: 'PENDING' });
+    await flush();
     expect(err).toHaveBeenCalled();
     err.mockRestore();
+  });
+});
+
+describe('ReviewsService admin email throttling', () => {
+  const bought = [{ userId: 1, status: 'COMPLETED', productIds: [7] }];
+  afterEach(() => jest.restoreAllMocks());
+
+  it('a second edit while already PENDING sends no email (5 PATCHes => at most 1)', async () => {
+    const { svc, mail } = makeService({ reviews: [row({ id: 5, status: 'APPROVED' })] });
+    for (let i = 0; i < 5; i++) await svc.update(5, 1, 'CUSTOMER', { rating: (i % 4) + 1, body: `Edit number ${i} of my review` });
+    await flush();
+    expect(mail.sendReviewPending).toHaveBeenCalledTimes(1);
+  });
+  it('POST edits while PENDING send no email either', async () => {
+    const { svc, mail } = makeService({ orders: bought, reviews: [row({ status: 'PENDING' })] });
+    await svc.upsertForProduct(7, 1, { rating: 2, body: 'Changed while still pending ok' });
+    await flush();
+    expect(mail.sendReviewPending).not.toHaveBeenCalled();
+  });
+  it('REJECTED -> PENDING by the author sends one email', async () => {
+    const { svc, mail } = makeService({ orders: bought, reviews: [row({ status: 'REJECTED' })] });
+    await svc.upsertForProduct(7, 1, { rating: 2, body: 'Reworded after rejection ok' });
+    await flush();
+    expect(mail.sendReviewPending).toHaveBeenCalledTimes(1);
+  });
+  it('cooldown: a new transition into PENDING within 10 minutes is suppressed, allowed after', async () => {
+    const t = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const { svc, mail, reviews } = makeService({ reviews: [row({ id: 5, status: 'APPROVED' })] });
+    await svc.update(5, 1, 'CUSTOMER', { rating: 2 });
+    reviews[0].status = 'APPROVED'; // admin approved it again
+    t.mockReturnValue(1_000_000 + 9 * 60_000);
+    await svc.update(5, 1, 'CUSTOMER', { rating: 3 });
+    await flush();
+    expect(mail.sendReviewPending).toHaveBeenCalledTimes(1);
+    reviews[0].status = 'APPROVED';
+    t.mockReturnValue(1_000_000 + 11 * 60_000);
+    await svc.update(5, 1, 'CUSTOMER', { rating: 4 });
+    await flush();
+    expect(mail.sendReviewPending).toHaveBeenCalledTimes(2);
+  });
+  it('delete + repost within the cooldown is suppressed', async () => {
+    const { svc, mail } = makeService({ orders: bought });
+    await svc.upsertForProduct(7, 1, input);
+    const id = (await svc.eligibility(7, 1)).hasReview ? 100 : 0;
+    await svc.remove(id, 1, 'CUSTOMER');
+    await svc.upsertForProduct(7, 1, { rating: 4, body: 'Reposted right after deleting' });
+    await flush();
+    expect(mail.sendReviewPending).toHaveBeenCalledTimes(1);
+  });
+  it('the request does not wait for the mailer', async () => {
+    const { svc, mail } = makeService({ orders: bought });
+    let release!: () => void;
+    mail.sendReviewPending.mockImplementation(() => new Promise<void>((r) => { release = r; }));
+    await expect(svc.upsertForProduct(7, 1, input)).resolves.toMatchObject({ status: 'PENDING' });
+    release?.();
+  });
+  it('the cooldown map stays bounded', async () => {
+    const { svc } = makeService();
+    const take = (u: number) => (svc as any).takeNotifySlot(u);
+    for (let u = 1; u <= 2500; u++) take(u);
+    expect((svc as any).lastNotified.size).toBeLessThanOrEqual(1000);
+  });
+});
+
+describe('ReviewsService admin queue ordering', () => {
+  it('PENDING is oldest first; other tabs newest first', async () => {
+    const { svc, prisma } = makeService({ reviews: [row({ id: 1 })] });
+    await svc.listAll({ status: 'PENDING' });
+    expect(prisma.review.findMany.mock.calls[0][0].orderBy[0]).toEqual({ createdAt: 'asc' });
+    await svc.listAll({ status: 'APPROVED' });
+    expect(prisma.review.findMany.mock.calls[1][0].orderBy[0]).toEqual({ createdAt: 'desc' });
   });
 });
