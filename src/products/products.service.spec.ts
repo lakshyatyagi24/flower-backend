@@ -47,6 +47,81 @@ describe('normalizeTags', () => {
   });
 });
 
+describe('ProductsService ratings and popularity count APPROVED reviews only (R22)', () => {
+  function build(reviews: Array<{ productId: number; rating: number; status: string }>, products: Array<{ id: number; createdAt: Date }>) {
+    const matches = (r: any, where: any) =>
+      (!where.productId?.in || where.productId.in.includes(r.productId)) &&
+      (where.productId === undefined || typeof where.productId !== 'number' || where.productId === r.productId) &&
+      (!where.status || where.status === r.status);
+    const groupBy = jest.fn(async ({ where }: any) => {
+      const by = new Map<number, number[]>();
+      for (const r of reviews.filter((x) => matches(x, where))) by.set(r.productId, [...(by.get(r.productId) ?? []), r.rating]);
+      return [...by].map(([productId, rs]) => ({ productId, _avg: { rating: rs.reduce((a, b) => a + b, 0) / rs.length }, _count: { _all: rs.length } }));
+    });
+    const aggregate = jest.fn(async ({ where }: any) => {
+      const rs = reviews.filter((x) => matches(x, where)).map((x) => x.rating);
+      return { _avg: { rating: rs.length ? rs.reduce((a, b) => a + b, 0) / rs.length : null }, _count: { _all: rs.length } };
+    });
+    const findMany = jest.fn(async (args: any) => {
+      if (args.where?.id?.in) return products.filter((p) => args.where.id.in.includes(p.id)).map((p) => ({ ...p, image: null }));
+      return products.map((p) => ({ ...p, image: null }));
+    });
+    const prisma: any = {
+      product: { findMany, count: jest.fn(async () => products.length), findUnique: jest.fn(async () => ({ id: 1, image: null })) },
+      review: { groupBy, aggregate },
+    };
+    return { svc: new ProductsService(prisma), groupBy, aggregate, findMany };
+  }
+  const d = (n: number) => new Date(2026, 0, n);
+  const products = [{ id: 1, createdAt: d(1) }, { id: 2, createdAt: d(2) }, { id: 3, createdAt: d(3) }];
+  const reviews = [
+    // product 1: 1 approved, 3 pending/rejected  -> approved count 1
+    { productId: 1, rating: 5, status: 'APPROVED' },
+    { productId: 1, rating: 1, status: 'PENDING' },
+    { productId: 1, rating: 1, status: 'PENDING' },
+    { productId: 1, rating: 1, status: 'REJECTED' },
+    // product 2: 2 approved -> count 2, avg 4
+    { productId: 2, rating: 4, status: 'APPROVED' },
+    { productId: 2, rating: 4, status: 'APPROVED' },
+    // product 3: only pending -> 0
+    { productId: 3, rating: 5, status: 'PENDING' },
+  ];
+
+  it('list() ratings use an APPROVED-only filter and ignore pending/rejected', async () => {
+    const { svc, groupBy } = build(reviews, products);
+    const res = await svc.list({});
+    expect(groupBy.mock.calls[0][0].where.status).toBe('APPROVED');
+    const by = Object.fromEntries(res.items.map((i: any) => [i.id, [i.averageRating, i.reviewCount]]));
+    expect(by).toEqual({ 1: [5, 1], 2: [4, 2], 3: [0, 0] });
+  });
+
+  it('getBySlug()/getById() aggregate APPROVED only', async () => {
+    const { svc, aggregate } = build(reviews, products);
+    const one = await svc.getById(1);
+    expect(aggregate.mock.calls[0][0].where).toEqual({ productId: 1, status: 'APPROVED' });
+    expect(one).toMatchObject({ averageRating: 5, reviewCount: 1 });
+    const three = await svc.getBySlug('x').catch(() => null);
+    expect(three).toBeTruthy();
+  });
+
+  it('sort=popular ranks by APPROVED count (pending/rejected do not help), newest breaks ties', async () => {
+    const { svc, groupBy } = build(reviews, products);
+    const res = await svc.list({ sort: 'popular' });
+    expect(groupBy.mock.calls[0][0].where.status).toBe('APPROVED');
+    // 2 has two approved, 1 has one approved (despite 4 total), 3 has zero (despite a pending one).
+    expect(res.items.map((i: any) => i.id)).toEqual([2, 1, 3]);
+    expect(res.total).toBe(3);
+  });
+
+  it('sort=popular paginates over the ranked list', async () => {
+    const { svc } = build(reviews, products);
+    const p1 = await svc.list({ sort: 'popular', take: 1, skip: 0 });
+    const p2 = await svc.list({ sort: 'popular', take: 1, skip: 1 });
+    expect([p1.items[0].id, p2.items[0].id]).toEqual([2, 1]);
+    expect(p2.page).toBe(2);
+  });
+});
+
 describe('ProductsService.list query building', () => {
   it('defaults: newest, id tiebreaker, take 50, skip 0, page 1', async () => {
     const { svc, findMany } = makeService(0);
@@ -62,7 +137,6 @@ describe('ProductsService.list query building', () => {
     ['price_asc', [{ price: 'asc' }, { id: 'desc' }]],
     ['price_desc', [{ price: 'desc' }, { id: 'desc' }]],
     ['newest', [{ createdAt: 'desc' }, { id: 'desc' }]],
-    ['popular', [{ reviews: { _count: 'desc' } }, { createdAt: 'desc' }, { id: 'desc' }]],
     ['bogus', [{ createdAt: 'desc' }, { id: 'desc' }]],
   ])('sort=%s', async (sort, expected) => {
     const { svc, findMany } = makeService();

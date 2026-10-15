@@ -193,6 +193,12 @@ enum BookingStatus {
   CANCELLED
 }
 
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 model Review {
   id        Int      @id @default(autoincrement())
   product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -202,10 +208,13 @@ model Review {
   rating    Int
   title     String?
   body      String
+  // New and edited reviews start PENDING; only APPROVED ones are public and counted in ratings.
+  status    ReviewStatus @default(PENDING)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([productId, userId])
+  @@index([productId, status])
   @@index([productId])
 }
 

@@ -68,7 +68,11 @@ describe('Product tags, sort and pagination (e2e)', () => {
   it('sort=popular runs against the DB and orders by review count', async () => {
     const user = await prisma.user.create({ data: { email: `${run}@example.com`, password: 'x', name: 'PT' } });
     try {
-      await prisma.review.create({ data: { productId: cheap.id, userId: user.id, rating: 5, body: 'nice' } });
+      await prisma.review.create({ data: { productId: cheap.id, userId: user.id, rating: 5, body: 'nice', status: 'PENDING' } });
+      // A pending review must not make a product more popular (R22).
+      const before = await http().get(`/products?tag=common-${run}&sort=popular`).expect(200);
+      expect(before.body.items.map((p: any) => p.slug)).toEqual([dear.slug, cheap.slug]);
+      await prisma.review.updateMany({ where: { productId: cheap.id }, data: { status: 'APPROVED' } });
       const res = await http().get(`/products?tag=common-${run}&sort=popular`).expect(200);
       expect(res.body.items.map((p: any) => p.slug)).toEqual([cheap.slug, dear.slug]);
     } finally {

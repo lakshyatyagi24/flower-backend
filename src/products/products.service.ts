@@ -65,7 +65,9 @@ const SORT_ORDERS: Record<string, Record<string, unknown>[]> = {
   newest: [{ createdAt: 'desc' }, { id: 'desc' }],
   price_asc: [{ price: 'asc' }, { id: 'desc' }],
   price_desc: [{ price: 'desc' }, { id: 'desc' }],
-  popular: [{ reviews: { _count: 'desc' } }, { createdAt: 'desc' }, { id: 'desc' }],
+  // `popular` is handled separately in list(): Prisma cannot order by a FILTERED relation count, and
+  // only APPROVED reviews may count (R22). The tiebreak matches `newest`.
+  popular: [{ createdAt: 'desc' }, { id: 'desc' }],
 };
 
 function slugify(input: string): string {
@@ -154,7 +156,7 @@ export class ProductsService {
     const ids = products.map((p) => p.id);
     const groups = await this.prisma.review.groupBy({
       by: ['productId'],
-      where: { productId: { in: ids } },
+      where: { productId: { in: ids }, status: 'APPROVED' },
       _avg: { rating: true },
       _count: { _all: true },
     });
@@ -174,7 +176,7 @@ export class ProductsService {
 
   private async attachRating<T extends { id: number }>(product: T): Promise<T & { averageRating: number; reviewCount: number }> {
     const agg = await this.prisma.review.aggregate({
-      where: { productId: product.id },
+      where: { productId: product.id, status: 'APPROVED' },
       _avg: { rating: true },
       _count: { _all: true },
     });
@@ -183,6 +185,40 @@ export class ProductsService {
       averageRating: agg._avg.rating ?? 0,
       reviewCount: agg._count._all,
     };
+  }
+
+  /**
+   * `popular` = most APPROVED reviews first, then newest. The catalogue is small, so rank all matching
+   * ids in memory (id + createdAt only), slice the page, then load full rows for just that page.
+   */
+  private async fetchPopularPage(where: Record<string, unknown>, take: number, skip: number): Promise<[any[], number]> {
+    const all = (await this.prisma.product.findMany({
+      where,
+      select: { id: true, createdAt: true },
+    } as any)) as Array<{ id: number; createdAt: Date }>;
+    const total = all.length;
+    const groups = all.length
+      ? await this.prisma.review.groupBy({
+          by: ['productId'],
+          where: { productId: { in: all.map((p) => p.id) }, status: 'APPROVED' },
+          _count: { _all: true },
+        })
+      : [];
+    const counts = new Map<number, number>(groups.map((g) => [g.productId, g._count._all]));
+    all.sort(
+      (a, b) =>
+        (counts.get(b.id) ?? 0) - (counts.get(a.id) ?? 0) ||
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() ||
+        b.id - a.id,
+    );
+    const pageIds = all.slice(skip, skip + take).map((p) => p.id);
+    if (pageIds.length === 0) return [[], total];
+    const rows = (await this.prisma.product.findMany({
+      where: { id: { in: pageIds } },
+      select: this.select,
+    } as any)) as Array<{ id: number; image: string | null }>;
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return [pageIds.map((id) => byId.get(id)).filter((r) => !!r), total];
   }
 
   async list(params: ListParams) {
@@ -221,16 +257,15 @@ export class ProductsService {
     const orderBy = Object.prototype.hasOwnProperty.call(SORT_ORDERS, params.sort ?? '')
       ? SORT_ORDERS[params.sort as string]
       : SORT_ORDERS.newest;
-    const [rawItems, total] = await Promise.all([
-      this.prisma.product.findMany({
-        where,
-        orderBy,
-        select: this.select,
-        take,
-        skip,
-      }),
-      this.prisma.product.count({ where }),
-    ]);
+    const productPage = () =>
+      this.prisma.product.findMany({ where, orderBy, select: this.select, take, skip });
+    let rawItems: Awaited<ReturnType<typeof productPage>>;
+    let total: number;
+    if (params.sort === 'popular') {
+      [rawItems, total] = await this.fetchPopularPage(where, take, skip);
+    } else {
+      [rawItems, total] = await Promise.all([productPage(), this.prisma.product.count({ where })]);
+    }
     const sanitizedItems = rawItems.map((item) => ({
       ...item,
       image: normalizeImageUrl(item.image),

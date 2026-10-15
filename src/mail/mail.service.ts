@@ -66,6 +66,11 @@ export class MailService {
     await this.deliver(e.customerEmail ?? '', 'We received your enquiry', () => T.enquiryReceivedHtml(e.customerName, this.site));
     await this.deliver(this.admin, `New enquiry #${e.id}`, () => T.adminEnquiryHtml(e, this.adminSite));
   }
+  async sendReviewPending(r: Parameters<typeof T.adminReviewPendingHtml>[0]): Promise<void> {
+    // Subject is plain text, but user-controlled: drop line breaks (header injection) and cap length.
+    const product = r.productName.replace(/[\r\n]+/g, ' ').slice(0, 80);
+    await this.deliver(this.admin, `Review awaiting approval: ${product}`, () => T.adminReviewPendingHtml(r, this.adminSite));
+  }
   async sendNewsletterWelcome(to: string): Promise<void> {
     await this.deliver(to, 'Welcome to Fresh Petals', () => T.newsletterWelcomeHtml(this.site));
   }

@@ -97,3 +97,15 @@ export function passwordResetHtml(url: string, siteUrl: string): string {
 export function newsletterWelcomeHtml(siteUrl: string): string {
   return layout('Welcome to Fresh Petals', `<p>You are on the list. Seasonal stems, studio news and occasional offers — never spam.</p><p><a href="${siteUrl}/products">Shop fresh cut flowers</a></p>`, siteUrl);
 }
+
+export function adminReviewPendingHtml(
+  r: { id: number; productName: string; rating: number; title: string | null; body: string; authorName: string | null; edited: boolean },
+  adminUrl: string,
+): string {
+  const stars = '★'.repeat(r.rating) + '☆'.repeat(Math.max(0, 5 - r.rating));
+  return layout(r.edited ? 'A review was edited and needs approval' : 'New review awaiting approval', `
+<p>Product: <strong>${esc(r.productName)}</strong><br>From: ${esc(r.authorName)}<br>Rating: ${stars} (${r.rating}/5)</p>
+${r.title ? `<p><strong>${esc(r.title)}</strong></p>` : ''}
+<p style="white-space:pre-wrap">${esc(r.body)}</p>
+<p><a href="${adminUrl}/reviews">Open the review queue</a></p>`, adminUrl);
+}
