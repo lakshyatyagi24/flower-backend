@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "_readme": "Maps product slugs to photo files in the storefront public/ folder. Empty until the photos and their manifest arrive. Format: items { slug: { image, alt? } } (exact match wins) and groups [ { slugPrefix, image, alt? } ] (one photo for every colour of a flower). Images must be /images/products/<name>.webp|jpg|png|avif. Applied by `node prisma/apply-catalogue-content.js --images` only where a product has no photo of its own (empty, placeholder or a theflora/Shopify hotlink); a mapped file that is missing from public/ is skipped. alt is documentation only: the Product table has no alt field and the storefront uses the product name.",
+  "items": {},
+  "groups": []
+}
