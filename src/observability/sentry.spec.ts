@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return */
 import { buildSentryOptions, initSentry, sentryEnabled } from './sentry';
 import {
   REDACTED,
@@ -151,5 +151,97 @@ describe('beforeSend', () => {
         r.test('ThrottlerException: Too Many Requests'),
       ),
     ).toBe(true);
+  });
+});
+
+describe('scrubbing gaps (fix round)', () => {
+  const opts: any = buildSentryOptions({ SENTRY_DSN_API: 'x' });
+
+  it('strips the query string from request.url (admin order search leaks phones otherwise)', () => {
+    const e: any = scrubEvent({
+      request: {
+        url: 'https://api.freshpetalsindia.com/orders?q=9876543210&page=2',
+      },
+      transaction: 'GET /orders?q=9876543210',
+    });
+    expect(e.request.url).toBe('https://api.freshpetalsindia.com/orders');
+    expect(e.transaction).toBe('GET /orders');
+  });
+
+  it('scrubs span description and data (urls, queries, sql)', () => {
+    const e: any = scrubEvent({
+      spans: [
+        {
+          description: 'GET https://api.resend.com/emails?to=a@b.co',
+          data: {
+            'url.full': 'https://x.test/orders?q=9876543210',
+            'http.query': 'q=9876543210',
+            'http.url': 'https://x.test/a?email=a@b.co',
+            'http.target': '/orders?q=9876543210',
+            'db.statement': 'select * from "User" where phone = $1',
+            'http.status_code': 200,
+          },
+        },
+      ],
+    });
+    const json = JSON.stringify(e);
+    expect(json).not.toMatch(/9876543210|a@b\.co|User/);
+    expect(e.spans[0].data['http.status_code']).toBe(200);
+    expect(e.spans[0].description).toBe('GET https://api.resend.com/emails');
+  });
+
+  it('redacts Indian mobile numbers in messages, exceptions, breadcrumbs and extra', () => {
+    const e: any = scrubEvent({
+      message: 'call +91 98765 43210? no: +91-9876543210 or 09876543210 x',
+      exception: { values: [{ value: 'bad phone 9876543210' }] },
+      breadcrumbs: [
+        { message: 'sent to 8765432109', data: { note: 'ring 7654321098' } },
+      ],
+      extra: { note: 'phone is 6543210987' },
+    });
+    expect(JSON.stringify(e)).not.toMatch(/987654|876543|765432|654321/);
+    expect(redactString('order 1234567890123 total 99')).toBe(
+      'order 1234567890123 total 99',
+    );
+  });
+
+  it('truncates Prisma call arguments at "invocation:" and caps long values', () => {
+    const e: any = scrubEvent({
+      exception: {
+        values: [
+          {
+            value:
+              '\nInvalid `prisma.order.create()` invocation:\n{ data: { name: "Jane Doe", address: "12 Rose Street" } }\nArgument x missing',
+          },
+          { value: 'x'.repeat(2000) },
+        ],
+      },
+    });
+    expect(e.exception.values[0].value).toContain('invocation:');
+    expect(e.exception.values[0].value).not.toMatch(/Jane|Rose/);
+    expect(e.exception.values[1].value.length).toBeLessThanOrEqual(503);
+  });
+
+  it('still redacts emails and keeps non-sensitive text', () => {
+    const e: any = scrubEvent({ message: 'fail jane@example.com in checkout' });
+    expect(e.message).toBe(`fail ${REDACTED} in checkout`);
+  });
+
+  it('only propagates trace headers to the loopback API', () => {
+    expect(opts.tracePropagationTargets).toHaveLength(1);
+    expect(
+      opts.tracePropagationTargets[0].test('http://127.0.0.1:3001/x'),
+    ).toBe(true);
+    expect(
+      opts.tracePropagationTargets[0].test('https://api.razorpay.com/v1'),
+    ).toBe(false);
+  });
+
+  it('ignoreErrors no longer swallows genuine connection errors', () => {
+    const hit = (s: string) => opts.ignoreErrors.some((r: RegExp) => r.test(s));
+    expect(hit('Error: aborted')).toBe(true);
+    expect(hit('Error: request aborted')).toBe(true);
+    expect(hit('Error: read ECONNRESET')).toBe(false);
+    expect(hit('Error: transaction aborted by deadlock')).toBe(false);
   });
 });

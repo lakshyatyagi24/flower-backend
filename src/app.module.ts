@@ -43,8 +43,13 @@ const sentry = sentryNestWiring();
     CouponsModule,
     // Test-only endpoints: [] unless NODE_ENV=test and ENABLE_TEST_ENDPOINTS=1; throws in production if the flag is set.
     ...testSupportModules(),
+    // Sentry tracing interceptor; [] unless SENTRY_DSN_API is set.
+    ...sentry.imports,
   ],
   controllers: [HealthController],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }, ...sentry.providers],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    ...sentry.providers,
+  ],
 })
 export class AppModule {}

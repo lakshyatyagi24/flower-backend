@@ -20,6 +20,8 @@ export function buildSentryOptions(env: Env = process.env) {
     sendDefaultPii: false,
     tracesSampleRate: 0.1,
     ignoreErrors: IGNORED_ERRORS,
+    // Only the in-container API loopback gets sentry-trace/baggage headers; never Razorpay, Resend or Cloudinary.
+    tracePropagationTargets: [/^http:\/\/127\.0\.0\.1/],
     beforeSend(
       event: Record<string, any>,
       hint?: { originalException?: unknown },
@@ -44,8 +46,17 @@ export function initSentry(
 ): boolean {
   if (!sentryEnabled(env)) return false;
   // Lazy require: with no DSN the SDK is never even loaded.
-  const run =
-    init ?? (require('@sentry/nestjs') as typeof import('@sentry/nestjs')).init;
-  run(buildSentryOptions(env));
+  const options: Record<string, any> = buildSentryOptions(env);
+  if (init) {
+    init(options);
+  } else {
+    const sdk = require('@sentry/nestjs') as typeof import('@sentry/nestjs');
+    // Sentry's default 'warn' mode would swallow unhandled rejections; 'strict' keeps Node's pre-Sentry
+    // behaviour (capture, then exit so the container restarts).
+    options.integrations = [
+      sdk.onUnhandledRejectionIntegration({ mode: 'strict' }),
+    ];
+    sdk.init(options);
+  }
   return true;
 }
