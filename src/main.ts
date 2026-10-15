@@ -1,3 +1,5 @@
+// Sentry instrumentation must load before everything else (no-op without SENTRY_DSN_API).
+import './instrument';
 // Load .env into process.env FIRST, before anything reads it. The app has no
 // ConfigModule; previously only the Prisma client (instantiated during module
 // init) pulled in .env, which is too late for the startup secret check below.

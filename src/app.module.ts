@@ -18,6 +18,10 @@ import { PaymentsModule } from './payments/payments.module';
 import { DeliveryModule } from './delivery/delivery.module';
 import { CouponsModule } from './coupons/coupons.module';
 import { testSupportModules } from './test-support/test-support.env';
+import { sentryNestWiring } from './observability/sentry-nest';
+
+// Empty unless SENTRY_DSN_API is set (see observability/sentry-nest.ts).
+const sentry = sentryNestWiring();
 
 @Module({
   imports: [
@@ -41,6 +45,6 @@ import { testSupportModules } from './test-support/test-support.env';
     ...testSupportModules(),
   ],
   controllers: [HealthController],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }, ...sentry.providers],
 })
 export class AppModule {}
