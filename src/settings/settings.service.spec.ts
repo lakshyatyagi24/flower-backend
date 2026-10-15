@@ -173,3 +173,47 @@ describe('credential-looking settings keys (Task 5.7)', () => {
     for (const s of samples) expect(script.isSecretSettingKey(s)).toBe(isSecretSettingKey(s));
   });
 });
+
+describe('extended credential patterns and the cleanup script helpers (Task 5.7 fix round)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const script = require('../../prisma/cleanup-secret-settings.js');
+
+  it.each(['mail.smtpPass', 'db.pass', 'x.adminPasswd', 'sms.credentials', 'store.credential', 'ssh.privateKey', 'a.privateToken', 'seo.PRIVATE_value'])(
+    'flags %s',
+    (k) => {
+      expect(isSecretSettingKey(k)).toBe(true);
+      expect(script.isSecretSettingKey(k)).toBe(true);
+    },
+  );
+
+  it.each(['delivery.supportedCities', 'delivery.businessHours', 'policies.deliverySummary', 'social.pinterest', 'store.gstin', 'homepage.announcementHref', 'seo.privacyUrl', 'trust.passport'])(
+    'does not flag %s',
+    (k) => {
+      expect(isSecretSettingKey(k)).toBe(false);
+      expect(script.isSecretSettingKey(k)).toBe(false);
+    },
+  );
+
+  it('argValue rejects a missing value or another flag as the value', () => {
+    expect(script.argValue(['--apply', '--backup', '/tmp/x.json'], '--backup')).toBe('/tmp/x.json');
+    expect(script.argValue(['--apply'], '--backup')).toBeUndefined();
+    expect(() => script.argValue(['--backup', '--apply'], '--backup')).toThrow(/needs a file path/);
+    expect(() => script.argValue(['--apply', '--backup'], '--backup')).toThrow(/needs a file path/);
+  });
+
+  it('writePrivateFile tightens the mode of a file that already exists', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const os = require('os');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fp-bk-'));
+    const f = path.join(dir, 'b.json');
+    fs.writeFileSync(f, 'old', { mode: 0o644 });
+    script.writePrivateFile(f, 'new');
+    expect(fs.readFileSync(f, 'utf8')).toBe('new');
+    if (process.platform !== 'win32') expect(fs.statSync(f).mode & 0o777).toBe(0o600);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
