@@ -65,9 +65,17 @@ export function assertJwtSecret(): void {
   getSecret();
 }
 
+/** Customers stay signed in for a week; admin sessions (which can refund, export PII...) last 12 hours. */
+export const CUSTOMER_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7;
+export const ADMIN_TOKEN_TTL_SECONDS = 60 * 60 * 12;
+
+export function tokenTtlForRole(role: JwtPayload['role']): number {
+  return role === 'ADMIN' ? ADMIN_TOKEN_TTL_SECONDS : CUSTOMER_TOKEN_TTL_SECONDS;
+}
+
 export function signJwt(
   payload: Omit<JwtPayload, 'iat' | 'exp'>,
-  ttlSeconds = 60 * 60 * 24 * 7,
+  ttlSeconds = CUSTOMER_TOKEN_TTL_SECONDS,
 ): string {
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);

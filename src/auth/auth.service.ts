@@ -10,7 +10,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { normalizeIndianPhone } from '../common/validators';
 import { createHash, randomBytes } from 'crypto';
 import { MailService } from '../mail/mail.service';
-import { hashPassword, signJwt, verifyPassword } from './jwt.util';
+import { hashPassword, signJwt, tokenTtlForRole, verifyPassword } from './jwt.util';
 import { RESET_TOKEN_SINK, type ResetTokenSink } from '../test-support/reset-token-sink';
 
 interface RegisterInput {
@@ -51,6 +51,12 @@ export class AuthService {
     };
   }
 
+  /** The role claim comes from the DB row; the TTL follows the role (ADMIN 12h, CUSTOMER 7d). */
+  private issueToken(user: { id: number; email: string; role: string }) {
+    const role = user.role === 'ADMIN' ? 'ADMIN' : 'CUSTOMER';
+    return signJwt({ sub: user.id, email: user.email, role }, tokenTtlForRole(role));
+  }
+
   async register(input: RegisterInput) {
     const email = input.email?.trim().toLowerCase();
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -73,7 +79,7 @@ export class AuthService {
       },
     });
 
-    const token = signJwt({ sub: user.id, email: user.email, role: user.role as 'CUSTOMER' | 'ADMIN' });
+    const token = this.issueToken(user);
     return { token, user: this.sanitize(user) };
   }
 
@@ -84,7 +90,7 @@ export class AuthService {
     if (!user) throw new UnauthorizedException('Invalid credentials');
     const ok = await verifyPassword(input.password, user.password);
     if (!ok) throw new UnauthorizedException('Invalid credentials');
-    const token = signJwt({ sub: user.id, email: user.email, role: user.role as 'CUSTOMER' | 'ADMIN' });
+    const token = this.issueToken(user);
     return { token, user: this.sanitize(user) };
   }
 
