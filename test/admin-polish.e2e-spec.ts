@@ -205,4 +205,37 @@ describe('Admin polish: stats series, order search, CSV export (e2e)', () => {
       expect(res.headers['content-type']).toMatch(/text\/csv/);
     });
   });
+
+  describe('GET /sliders?includeInactive=true', () => {
+    const sliderIds: number[] = [];
+    let activeId: number; let draftId: number;
+    beforeAll(async () => {
+      const a = await prisma.slider.create({ data: { title: `${tag} live`, active: true, sortOrder: 9000 } as any });
+      const d = await prisma.slider.create({ data: { title: `${tag} draft`, active: false, sortOrder: 9001 } as any });
+      activeId = a.id; draftId = d.id; sliderIds.push(a.id, d.id);
+    });
+    afterAll(async () => {
+      await prisma.slider.deleteMany({ where: { id: { in: sliderIds } } });
+    });
+    const idsOf = (body: any[]) => body.map((x) => x.id);
+
+    it('anonymous callers only ever get active sliders (no 401)', async () => {
+      const res = await request(app.getHttpServer()).get('/sliders?includeInactive=true').expect(200);
+      expect(idsOf(res.body)).toContain(activeId);
+      expect(idsOf(res.body)).not.toContain(draftId);
+    });
+
+    it('a customer token does not unlock drafts', async () => {
+      const res = await request(app.getHttpServer()).get('/sliders?includeInactive=true')
+        .set('Authorization', `Bearer ${customerToken()}`).expect(200);
+      expect(idsOf(res.body)).not.toContain(draftId);
+    });
+
+    it('an admin token gets drafts too, and only with includeInactive=true', async () => {
+      const all = await get('/sliders?includeInactive=true').expect(200);
+      expect(idsOf(all.body)).toEqual(expect.arrayContaining([activeId, draftId]));
+      const def = await get('/sliders').expect(200);
+      expect(idsOf(def.body)).not.toContain(draftId);
+    });
+  });
 });

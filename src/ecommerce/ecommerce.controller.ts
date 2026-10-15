@@ -8,10 +8,12 @@ import {
   Param,
   Query,
   BadRequestException,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { EcommerceService } from './ecommerce.service';
-import { JwtAuthGuard, Roles } from '../auth/auth.guard';
+import { JwtAuthGuard, OptionalJwtAuthGuard, Roles } from '../auth/auth.guard';
+import type { JwtPayload } from '../auth/jwt.util';
 
 @Controller()
 export class EcommerceController {
@@ -80,9 +82,11 @@ export class EcommerceController {
   }
 
   // GET /sliders -> homepage sliders
+  // includeInactive=true (drafts) is honoured for ADMIN tokens only; everyone else silently gets active ones.
+  @UseGuards(OptionalJwtAuthGuard)
   @Get('sliders')
-  async getSliders(@Query('includeInactive') includeInactive?: string) {
-    return this.ecommerceService.getSliders(includeInactive === 'true');
+  async getSliders(@Query('includeInactive') includeInactive?: string, @Req() req?: { user?: JwtPayload }) {
+    return this.ecommerceService.getSliders(includeInactive === 'true' && req?.user?.role === 'ADMIN');
   }
 
   // GET /sliders/:id -> get single slider
