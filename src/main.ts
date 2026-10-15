@@ -48,7 +48,9 @@ async function bootstrap() {
     credentials: true,
   });
 
-  await app.listen(process.env.PORT ?? 3001);
+  // The test stack (seed admin, test-only endpoint) must not be reachable from the LAN; production keeps the default bind.
+  if (process.env.NODE_ENV === 'test') await app.listen(process.env.PORT ?? 3001, '127.0.0.1');
+  else await app.listen(process.env.PORT ?? 3001);
 }
 bootstrap().catch((err) => {
   console.error('Failed to start application:', err);

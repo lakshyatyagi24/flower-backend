@@ -5,6 +5,16 @@ import * as T from './templates';
 // Compose passes unset vars as empty strings, so read with `||`, not `??`.
 const stripSlash = (u: string) => u.replace(/\/+$/, '');
 
+/** Reset/action links are logged only where that is clearly safe: local development, tests, or an explicit opt-in. */
+const mayLogLinks = (): boolean =>
+  process.env.MAIL_LOG_LINKS === '1' || process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
+
+/** j***@gmail.com: enough to recognise, not enough to harvest. */
+export const maskEmail = (addr: string): string => {
+  const at = addr.lastIndexOf('@');
+  return at < 1 ? '***' : `${addr[0]}***${addr.slice(at)}`;
+};
+
 @Injectable()
 export class MailService {
   private readonly log = new Logger(MailService.name);
@@ -27,9 +37,10 @@ export class MailService {
     try {
       const html = buildHtml();
       if (!this.client) {
-        this.log.log(`[mail disabled] to=${to} subject="${subject}"`);
-        // Local dev convenience only: surface the first action link (e.g. reset link).
-        if (process.env.NODE_ENV !== 'production') {
+        const linksOk = mayLogLinks();
+        this.log.log(`[mail disabled] to=${linksOk ? to : maskEmail(to)} subject="${subject}"`);
+        // Local dev/test convenience only (allowlist): surface the first action link (e.g. reset link).
+        if (linksOk) {
           // Skip the layout's header/footer site links.
           const href = [...html.matchAll(/href="([^"]+)"/g)]
             .map((m) => m[1].replace(/&amp;/g, '&'))

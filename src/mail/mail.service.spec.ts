@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
-import { MailService } from './mail.service';
+import { MailService, maskEmail } from './mail.service';
 
-const ENV_KEYS = ['RESEND_API_KEY', 'NODE_ENV', 'ADMIN_NOTIFY_EMAIL', 'PUBLIC_SITE_URL'] as const;
+const ENV_KEYS = ['RESEND_API_KEY', 'MAIL_LOG_LINKS', 'NODE_ENV', 'ADMIN_NOTIFY_EMAIL', 'PUBLIC_SITE_URL'] as const;
 
 describe('MailService', () => {
   const saved: Record<string, string | undefined> = {};
@@ -39,9 +39,39 @@ describe('MailService', () => {
     const svc = new MailService();
     await svc.sendPasswordReset('a@b.com', 'https://x.test/reset?token=SECRET');
     const logged = [...logSpy.mock.calls, ...errSpy.mock.calls].map((c) => c[0]).join('\n');
-    expect(logged).toContain('a@b.com');
+    expect(logged).toContain('a***@b.com');
+    expect(logged).not.toContain('a@b.com');
     expect(logged).not.toContain('SECRET');
     expect(logged).not.toContain('<html');
+  });
+
+  it.each([['staging'], [undefined], ['']])('never logs the link or full address when NODE_ENV=%s (allowlist)', async (env) => {
+    if (env === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = env;
+    delete process.env.MAIL_LOG_LINKS;
+    await new MailService().sendPasswordReset('jane@gmail.com', 'https://x.test/reset?token=SECRET');
+    const logged = logSpy.mock.calls.map((c) => c[0]).join(' ');
+    expect(logged).not.toContain('SECRET');
+    expect(logged).not.toContain('jane@gmail.com');
+    expect(logged).toContain('j***@gmail.com');
+  });
+
+  it('MAIL_LOG_LINKS=1 opts in explicitly, even in production', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.MAIL_LOG_LINKS = '1';
+    await new MailService().sendPasswordReset('a@b.com', 'https://x.test/reset?token=SECRET');
+    expect(logSpy.mock.calls.map((c) => c[0]).join(' ')).toContain('SECRET');
+  });
+
+  it('development logs the link', async () => {
+    process.env.NODE_ENV = 'development';
+    await new MailService().sendPasswordReset('a@b.com', 'https://x.test/reset?token=SECRET');
+    expect(logSpy.mock.calls.map((c) => c[0]).join(' ')).toContain('SECRET');
+  });
+
+  it('maskEmail', () => {
+    expect(maskEmail('jane@gmail.com')).toBe('j***@gmail.com');
+    expect(maskEmail('nonsense')).toBe('***');
+    expect(maskEmail('@x.com')).toBe('***');
   });
 
   it('logs (does not throw) a provider error object', async () => {
