@@ -326,3 +326,43 @@ describe('script helpers', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('photo data / file consistency', () => {
+  const { findPublicDir } = require('../../prisma/apply-catalogue-content');
+  const publicDir: string | null = findPublicDir();
+  const map = require('../../prisma/data/product-images.json');
+  const mapped: string[] = [...Object.values(map.items ?? {}), ...(map.groups ?? [])].map((e: any) => e.image);
+  const heroes: string[] = HERO_SLIDES.map((s: any) => s.image);
+
+  // The storefront lives in a sibling repo; when it is not checked out next to this one there is nothing to compare.
+  const t = publicDir ? it : it.skip;
+
+  t('every product photo referenced in product-images.json exists under frontend/public and is a real WebP', () => {
+    expect(mapped.length).toBeGreaterThan(0);
+    for (const p of new Set(mapped)) {
+      const file = path.join(publicDir as string, p);
+      expect(fs.existsSync(file)).toBe(true);
+      const head = fs.readFileSync(file).subarray(0, 12);
+      if (p.endsWith('.webp')) {
+        expect(head.subarray(0, 4).toString('latin1')).toBe('RIFF');
+        expect(head.subarray(8, 12).toString('latin1')).toBe('WEBP');
+      }
+    }
+  });
+
+  t('every seed-sliders hero image exists under frontend/public', () => {
+    for (const p of heroes) expect(fs.existsSync(path.join(publicDir as string, p))).toBe(true);
+  });
+
+  t('every shipped photo is credited in CREDITS.md and every mapped slug has alt text', () => {
+    const credits = fs.readFileSync(path.join(publicDir as string, 'images', 'CREDITS.md'), 'utf8');
+    for (const p of new Set([...mapped, ...heroes])) expect(credits).toContain(p.replace('/images/', ''));
+    for (const [slug, e] of Object.entries(map.items ?? {})) expect((e as any).alt?.length).toBeGreaterThan(5);
+    expect(Object.keys(map.items).length).toBeGreaterThan(0);
+  });
+
+  it('every mapped slug is a real seeded product', () => {
+    const slugs = new Set(cutFlowerProducts.map((p: any) => p.slug));
+    for (const slug of Object.keys(map.items ?? {})) expect(slugs.has(slug)).toBe(true);
+  });
+});

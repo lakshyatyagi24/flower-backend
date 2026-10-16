@@ -1,6 +1,171 @@
 {
   "version": 1,
-  "_readme": "Maps product slugs to photo files in the storefront public/ folder. Empty until the photos and their manifest arrive. Format: items { slug: { image, alt? } } (exact match wins) and groups [ { slugPrefix, image, alt? } ] (one photo for every colour of a flower). Images must be /images/products/<name>.webp|jpg|png|avif. Applied by `node prisma/apply-catalogue-content.js --images` only where a product has no photo of its own (empty, placeholder or a theflora/Shopify hotlink); a mapped file that is missing from public/ is skipped. alt is documentation only: the Product table has no alt field and the storefront uses the product name.",
-  "items": {},
+  "_readme": "Maps product slugs to photo files in the storefront public/ folder. Interim Pexels stock photos (see frontend/public/images/CREDITS.md), mapped only where the photo is the same flower type and colour or an owner-accepted nearest match; entries marked \"Representative photo\" show a sibling type or nearest shade. Products not listed keep the text placeholder. Format: items { slug: { image, alt? } } (exact match wins) and groups [ { slugPrefix, image, alt? } ] (one photo for every colour of a flower). Images must be /images/products/<name>.webp|jpg|png|avif. Applied by `node prisma/apply-catalogue-content.js --images` only where a product has no photo of its own (empty, placeholder or a theflora/Shopify hotlink); a mapped file that is missing from public/ is skipped. alt is documentation only: the Product table has no alt field and the storefront uses the product name.",
+  "items": {
+    "agapanthus-powder-blue": {
+      "image": "/images/products/px-agap-blue.webp",
+      "alt": "A blue agapanthus flower head"
+    },
+    "alstroemeria-blush-pink": {
+      "image": "/images/products/px-alstro-pink.webp",
+      "alt": "Pink and white alstroemeria"
+    },
+    "anthuriums-ruby-red": {
+      "image": "/images/products/px-anth-red.webp",
+      "alt": "A red anthurium with a yellow spadix"
+    },
+    "asiatic-lily-blush-pink": {
+      "image": "/images/products/px-lily-pink.webp",
+      "alt": "Representative photo: pink and white oriental lilies"
+    },
+    "asiatic-lily-pearl-white": {
+      "image": "/images/products/px-lily-white.webp",
+      "alt": "Representative photo: white lilies in close-up"
+    },
+    "assorted-bunch-of-cut-flowers": {
+      "image": "/images/products/px-assorted.webp",
+      "alt": "Representative photo: a mixed bouquet of orange roses, sunflowers and yellow blooms in coloured wrapping"
+    },
+    "button-chrysanthemums-blazing-yellow": {
+      "image": "/images/products/px-chrys-yellow.webp",
+      "alt": "Representative photo: yellow-orange chrysanthemums in a bouquet"
+    },
+    "button-chrysanthemums-blush-pink": {
+      "image": "/images/products/px-chrys-pink.webp",
+      "alt": "Representative photo: pink and coral chrysanthemums in a garden bed"
+    },
+    "button-chrysanthemums-pearl-white": {
+      "image": "/images/products/px-chrys-white.webp",
+      "alt": "Representative photo: white chrysanthemums outdoors"
+    },
+    "carnations-hot-pink": {
+      "image": "/images/products/px-carn-hotpink.webp",
+      "alt": "Pink carnations filling the frame"
+    },
+    "carnations-pearl-white": {
+      "image": "/images/products/px-carn-white.webp",
+      "alt": "White carnations on a marble background"
+    },
+    "carnations-ruby-red": {
+      "image": "/images/products/px-carn-red.webp",
+      "alt": "Red carnations in soft light"
+    },
+    "chrysanthemum-blazing-yellow": {
+      "image": "/images/products/px-chrys-yellow.webp",
+      "alt": "Representative photo: yellow-orange chrysanthemums in a bouquet"
+    },
+    "chrysanthemum-blush-pink": {
+      "image": "/images/products/px-chrys-pink.webp",
+      "alt": "Representative photo: pink and coral chrysanthemums in a garden bed"
+    },
+    "chrysanthemum-pearl-white": {
+      "image": "/images/products/px-chrys-white.webp",
+      "alt": "Representative photo: white chrysanthemums outdoors"
+    },
+    "dendrobium-orchids-pearl-white": {
+      "image": "/images/products/px-dendro-white.webp",
+      "alt": "White dendrobium orchids"
+    },
+    "disbud-chrysanthemums-blazing-yellow": {
+      "image": "/images/products/px-chrys-yellow.webp",
+      "alt": "Representative photo: yellow-orange chrysanthemums in a bouquet"
+    },
+    "disbud-chrysanthemums-blush-pink": {
+      "image": "/images/products/px-chrys-pink.webp",
+      "alt": "Representative photo: pink and coral chrysanthemums in a garden bed"
+    },
+    "disbud-chrysanthemums-pearl-white": {
+      "image": "/images/products/px-chrys-white.webp",
+      "alt": "Representative photo: white chrysanthemums outdoors"
+    },
+    "gladioli-pearl-white": {
+      "image": "/images/products/px-glad-white.webp",
+      "alt": "White gladiolus florets"
+    },
+    "helichrysms-sunset-orange": {
+      "image": "/images/products/px-heli-orange.webp",
+      "alt": "An orange strawflower (everlasting)"
+    },
+    "heliconia": {
+      "image": "/images/products/px-heliconia.webp",
+      "alt": "An orange and red heliconia flower"
+    },
+    "hydrangea-powder-blue": {
+      "image": "/images/products/px-hyd-blue.webp",
+      "alt": "A blue hydrangea flower head"
+    },
+    "liatris": {
+      "image": "/images/products/px-liatris.webp",
+      "alt": "Purple liatris spikes in a garden"
+    },
+    "lisianthus-blush-pink": {
+      "image": "/images/products/px-lisi-pink.webp",
+      "alt": "Pink lisianthus in bloom"
+    },
+    "mokara-orchids-blazing-yellow": {
+      "image": "/images/products/px-mokara-yellow.webp",
+      "alt": "Yellow spotted Mokara orchids"
+    },
+    "oriental-lily-blush-pink": {
+      "image": "/images/products/px-lily-pink.webp",
+      "alt": "Representative photo: pink and white oriental lilies"
+    },
+    "oriental-lily-pearl-white": {
+      "image": "/images/products/px-lily-white.webp",
+      "alt": "White lilies in close-up"
+    },
+    "rose-blazing-yellow": {
+      "image": "/images/products/px-rose-yellow.webp",
+      "alt": "Yellow and peach roses on a garden bush"
+    },
+    "rose-blush-pink": {
+      "image": "/images/products/px-rose-blush.webp",
+      "alt": "Representative photo: pastel pale-pink roses"
+    },
+    "rose-pearl-white": {
+      "image": "/images/products/px-rose-white.webp",
+      "alt": "White roses in bloom"
+    },
+    "rose-ruby-red": {
+      "image": "/images/products/px-rose-red.webp",
+      "alt": "Red roses in a wrapped bunch"
+    },
+    "santini-chrysanthemums-white": {
+      "image": "/images/products/px-chrys-white.webp",
+      "alt": "Representative photo: white chrysanthemums outdoors"
+    },
+    "snapdragon-pearl-white": {
+      "image": "/images/products/px-snap-white.webp",
+      "alt": "White snapdragon spikes"
+    },
+    "spray-carnations-hot-pink": {
+      "image": "/images/products/px-carn-hotpink.webp",
+      "alt": "Representative photo: pink carnations filling the frame"
+    },
+    "spray-carnations-pearl-white": {
+      "image": "/images/products/px-carn-white.webp",
+      "alt": "Representative photo: white carnations on a marble background"
+    },
+    "spray-carnations-ruby-red": {
+      "image": "/images/products/px-carn-red.webp",
+      "alt": "Representative photo: red carnations in soft light"
+    },
+    "spray-roses-blush-pink": {
+      "image": "/images/products/px-rose-blush.webp",
+      "alt": "Representative photo: pastel pale-pink roses"
+    },
+    "sunflowers": {
+      "image": "/images/products/px-sun.webp",
+      "alt": "A yellow sunflower, close up"
+    },
+    "sunflowers-bicolor": {
+      "image": "/images/products/px-sun-bicolor.webp",
+      "alt": "A sunflower with yellow petals and red-orange bands"
+    },
+    "tube-roses-rajnigandha": {
+      "image": "/images/products/px-tuberose.webp",
+      "alt": "White double tuberose blooms"
+    }
+  },
   "groups": []
 }
