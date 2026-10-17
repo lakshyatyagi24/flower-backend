@@ -30,6 +30,10 @@
       "image": "/images/products/px-anth-pink.webp",
       "alt": "Pink-salmon anthuriums with green leaves"
     },
+    "anthuriums-fresh-green": {
+      "image": "/images/products/px-anth-green.webp",
+      "alt": "A lime-green anthurium with a red spadix on a peach background"
+    },
     "anthuriums-pearl-white": {
       "image": "/images/products/px-anth-white.webp",
       "alt": "A white anthurium on a marble surface"
@@ -126,6 +130,10 @@
       "image": "/images/products/px-chrys-pinkwhite.webp",
       "alt": "White chrysanthemums with magenta centres"
     },
+    "chrysanthemum-royal-purple": {
+      "image": "/images/products/px-chrys-purple.webp",
+      "alt": "Purple chrysanthemum blooms with dewdrops"
+    },
     "chrysanthemum-ruby-red": {
       "image": "/images/products/px-chrys-red.webp",
       "alt": "Red chrysanthemums in a garden"
@@ -202,6 +210,10 @@
       "image": "/images/products/px-hyd-purple.webp",
       "alt": "A purple-lilac hydrangea in a garden"
     },
+    "jumilla-roses": {
+      "image": "/images/products/px-rose-jumilla.webp",
+      "alt": "Representative photo: roses with white petals edged in pink"
+    },
     "liatris": {
       "image": "/images/products/px-liatris.webp",
       "alt": "Purple liatris spikes in a garden"
@@ -209,6 +221,10 @@
     "lisianthus-blush-pink": {
       "image": "/images/products/px-lisi-pink.webp",
       "alt": "Pink lisianthus in bloom"
+    },
+    "lisianthus-fresh-green": {
+      "image": "/images/products/px-lisi-green.webp",
+      "alt": "Representative photo: pale green-white lisianthus bouquet"
     },
     "lisianthus-pearl-white": {
       "image": "/images/products/px-lisi-white.webp",
@@ -225,6 +241,14 @@
     "mokara-orchids-blush-pink": {
       "image": "/images/products/px-mokara-pink.webp",
       "alt": "Representative photo: a salmon-pink spotted Mokara orchid"
+    },
+    "mokara-orchids-royal-purple": {
+      "image": "/images/products/px-mokara-purple.webp",
+      "alt": "Representative photo: violet-purple orchid sprays"
+    },
+    "mokara-orchids-ruby-red": {
+      "image": "/images/products/px-mokara-red.webp",
+      "alt": "Representative photo: red orchid sprays"
     },
     "oriental-lily-blazing-yellow": {
       "image": "/images/products/px-lily-yellow.webp",
@@ -285,6 +309,10 @@
     "santini-chrysanthemums-pink-and-white": {
       "image": "/images/products/px-chrys-pinkwhite.webp",
       "alt": "Representative photo: white chrysanthemums with magenta centres"
+    },
+    "santini-chrysanthemums-purple": {
+      "image": "/images/products/px-santini-purple.webp",
+      "alt": "Representative photo: lilac-purple daisy-type chrysanthemums with green centres"
     },
     "santini-chrysanthemums-red": {
       "image": "/images/products/px-chrys-red.webp",
