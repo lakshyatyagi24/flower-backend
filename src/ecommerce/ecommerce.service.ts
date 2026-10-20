@@ -15,6 +15,89 @@ function withProductCount<T extends { _count: { products: number }; children?: a
   };
 }
 
+const CATEGORY_BASE_FIELDS = {
+  id: true,
+  name: true,
+  slug: true,
+  image: true,
+  description: true,
+  productType: true,
+  defaultSaleMode: true,
+  defaultGstRate: true,
+  sortOrder: true,
+  active: true,
+} as const;
+
+const CATEGORY_WRITE_SELECT = {
+  ...CATEGORY_BASE_FIELDS,
+  parentId: true,
+} as const;
+
+const SLIDER_SELECT = {
+  id: true,
+  title: true,
+  eyebrow: true,
+  subtitle: true,
+  alt: true,
+  image: true,
+  href: true,
+  config: true,
+  sortOrder: true,
+  active: true,
+} as const;
+
+const CATEGORY_ORDER = [{ sortOrder: 'asc' }, { id: 'asc' }] as const;
+const MAX_MAIN_CATEGORIES = 8;
+const SLUG_TAKEN_MESSAGE = 'A category with this slug already exists. Please choose a different slug.';
+
+interface SliderInput {
+  title?: string;
+  eyebrow?: string;
+  subtitle?: string;
+  alt?: string;
+  image?: string;
+  href?: string;
+  config?: any;
+  sortOrder?: number;
+  active?: boolean;
+}
+
+/** Slider fields that fall back to the existing value when not supplied on update. */
+const SLIDER_MERGE_FIELDS = ['title', 'eyebrow', 'subtitle', 'alt', 'image', 'href', 'sortOrder', 'active'] as const;
+
+/** Accept config as an object or a JSON string; throws 400 on malformed JSON. */
+function parseSliderConfig(config: any): any {
+  if (!config || typeof config !== 'string') return config;
+  try {
+    return JSON.parse(config);
+  } catch (error) {
+    throw new BadRequestException('Invalid JSON in config field');
+  }
+}
+
+function rethrowCategoryError(error: any): never {
+  if (error.code === 'P2002' && error.meta?.target?.includes('slug')) {
+    throw new BadRequestException(SLUG_TAKEN_MESSAGE);
+  }
+  throw error;
+}
+
+function rethrowSliderError(error: any): never {
+  if (error.code === 'P2002') {
+    throw new BadRequestException('A slider with this sort order already exists');
+  }
+  throw error;
+}
+
+function mergeSliderUpdate(existing: any, data: SliderInput) {
+  const merged: Record<string, unknown> = {};
+  for (const key of SLIDER_MERGE_FIELDS) {
+    merged[key] = data[key] !== undefined ? data[key] : existing[key];
+  }
+  merged.config = data.config !== undefined ? { ...existing.config, ...data.config } : existing.config;
+  return merged;
+}
+
 @Injectable()
 export class EcommerceService {
   constructor(private readonly prisma: PrismaService) {}
@@ -23,18 +106,9 @@ export class EcommerceService {
   async getCategories() {
     const rows = await this.prisma.category.findMany({
       where: { parentId: null, active: true },
-      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+      orderBy: [...CATEGORY_ORDER],
       select: {
-        id: true,
-        name: true,
-        slug: true,
-        image: true,
-        description: true,
-        productType: true,
-        defaultSaleMode: true,
-        defaultGstRate: true,
-        sortOrder: true,
-        active: true,
+        ...CATEGORY_BASE_FIELDS,
         ...ACTIVE_PRODUCT_COUNT,
         children: { select: { id: true, name: true, slug: true, active: true, ...ACTIVE_PRODUCT_COUNT } },
       },
@@ -45,35 +119,14 @@ export class EcommerceService {
   // Return all categories with full hierarchy (admin)
   async getAllCategories() {
     const rows = await this.prisma.category.findMany({
-      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+      orderBy: [...CATEGORY_ORDER],
       select: {
-        id: true,
-        name: true,
-        slug: true,
-        image: true,
-        description: true,
-        productType: true,
-        defaultSaleMode: true,
-        defaultGstRate: true,
-        sortOrder: true,
-        active: true,
+        ...CATEGORY_BASE_FIELDS,
         parentId: true,
         ...ACTIVE_PRODUCT_COUNT,
         children: {
-          select: {
-            ...ACTIVE_PRODUCT_COUNT,
-            id: true,
-            name: true,
-            slug: true,
-            image: true,
-            parentId: true,
-            productType: true,
-            defaultSaleMode: true,
-            defaultGstRate: true,
-            sortOrder: true,
-            active: true,
-          },
-          orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+          select: { ...ACTIVE_PRODUCT_COUNT, ...CATEGORY_BASE_FIELDS, parentId: true },
+          orderBy: [...CATEGORY_ORDER],
         },
       },
     });
@@ -93,15 +146,7 @@ export class EcommerceService {
     sortOrder?: number;
     active?: boolean;
   }) {
-    // Check if creating a main category and enforce 8 limit
-    if (!data.parentId) {
-      const mainCategoryCount = await this.prisma.category.count({
-        where: { parentId: null, active: true },
-      });
-      if (mainCategoryCount >= 8) {
-        throw new BadRequestException('Maximum 8 main categories allowed');
-      }
-    }
+    if (!data.parentId) await this.assertMainCategoryCapacity();
 
     try {
       return await this.prisma.category.create({
@@ -117,25 +162,20 @@ export class EcommerceService {
           sortOrder: typeof data.sortOrder === 'number' ? data.sortOrder : 0,
           active: data.active ?? true,
         },
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-          image: true,
-          description: true,
-          parentId: true,
-          productType: true,
-          defaultSaleMode: true,
-          defaultGstRate: true,
-          sortOrder: true,
-          active: true,
-        },
+        select: CATEGORY_WRITE_SELECT,
       });
     } catch (error: any) {
-      if (error.code === 'P2002' && error.meta?.target?.includes('slug')) {
-        throw new BadRequestException('A category with this slug already exists. Please choose a different slug.');
-      }
-      throw error;
+      rethrowCategoryError(error);
+    }
+  }
+
+  // Enforce the cap on active top-level categories
+  private async assertMainCategoryCapacity() {
+    const mainCategoryCount = await this.prisma.category.count({
+      where: { parentId: null, active: true },
+    });
+    if (mainCategoryCount >= MAX_MAIN_CATEGORIES) {
+      throw new BadRequestException('Maximum 8 main categories allowed');
     }
   }
 
@@ -155,25 +195,10 @@ export class EcommerceService {
       return await this.prisma.category.update({
         where: { id },
         data,
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-          image: true,
-          description: true,
-          parentId: true,
-          productType: true,
-          defaultSaleMode: true,
-          defaultGstRate: true,
-          sortOrder: true,
-          active: true,
-        },
+        select: CATEGORY_WRITE_SELECT,
       });
     } catch (error: any) {
-      if (error.code === 'P2002' && error.meta?.target?.includes('slug')) {
-        throw new BadRequestException('A category with this slug already exists. Please choose a different slug.');
-      }
-      throw error;
+      rethrowCategoryError(error);
     }
   }
 
@@ -215,18 +240,7 @@ export class EcommerceService {
     return this.prisma.slider.findMany({
       where: includeInactive ? {} : { active: true },
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
-      select: {
-        id: true,
-        title: true,
-        eyebrow: true,
-        subtitle: true,
-        alt: true,
-        image: true,
-        href: true,
-        config: true,
-        sortOrder: true,
-        active: true,
-      },
+      select: SLIDER_SELECT,
     });
   }
 
@@ -234,18 +248,7 @@ export class EcommerceService {
   async getSlider(id: number) {
     const slider = await this.prisma.slider.findUnique({
       where: { id },
-      select: {
-        id: true,
-        title: true,
-        eyebrow: true,
-        subtitle: true,
-        alt: true,
-        image: true,
-        href: true,
-        config: true,
-        sortOrder: true,
-        active: true,
-      },
+      select: SLIDER_SELECT,
     });
 
     if (!slider) {
@@ -267,24 +270,10 @@ export class EcommerceService {
     sortOrder?: number;
     active?: boolean;
   }) {
-    // Validate config JSON if provided
-    if (data.config && typeof data.config === 'string') {
-      try {
-        data.config = JSON.parse(data.config);
-      } catch (error) {
-        throw new BadRequestException('Invalid JSON in config field');
-      }
-    }
+    data.config = parseSliderConfig(data.config);
 
-    // Set default sortOrder if not provided
     if (data.sortOrder === undefined || data.sortOrder === null) {
-      // Get the maximum sortOrder and add 1
-      const result = await this.prisma.slider.findFirst({
-        orderBy: { sortOrder: 'desc' },
-        select: { sortOrder: true },
-      });
-      const maxSort = result ? result.sortOrder : 0;
-      data.sortOrder = maxSort + 1;
+      data.sortOrder = await this.nextSliderSortOrder();
     }
 
     // sortOrder is intentionally not unique — see updateSlider. Ordering is
@@ -303,25 +292,20 @@ export class EcommerceService {
           sortOrder: data.sortOrder,
           active: data.active !== undefined ? data.active : true,
         },
-        select: {
-          id: true,
-          title: true,
-          eyebrow: true,
-          subtitle: true,
-          alt: true,
-          image: true,
-          href: true,
-          config: true,
-          sortOrder: true,
-          active: true,
-        },
+        select: SLIDER_SELECT,
       });
     } catch (error: any) {
-      if (error.code === 'P2002') {
-        throw new BadRequestException('A slider with this sort order already exists');
-      }
-      throw error;
+      rethrowSliderError(error);
     }
+  }
+
+  // Maximum existing sortOrder plus one
+  private async nextSliderSortOrder(): Promise<number> {
+    const result = await this.prisma.slider.findFirst({
+      orderBy: { sortOrder: 'desc' },
+      select: { sortOrder: true },
+    });
+    return (result ? result.sortOrder : 0) + 1;
   }
 
   // Update an existing slider
@@ -345,14 +329,7 @@ export class EcommerceService {
       throw new NotFoundException('Slider not found');
     }
 
-    // Validate config JSON if provided
-    if (data.config && typeof data.config === 'string') {
-      try {
-        data.config = JSON.parse(data.config);
-      } catch (error) {
-        throw new BadRequestException('Invalid JSON in config field');
-      }
-    }
+    data.config = parseSliderConfig(data.config);
 
     // NOTE: sortOrder is intentionally NOT unique. The admin reorder feature
     // swaps two sliders' sortOrder values with two parallel updates; a
@@ -362,35 +339,11 @@ export class EcommerceService {
     try {
       return await this.prisma.slider.update({
         where: { id },
-        data: {
-          title: data.title !== undefined ? data.title : existingSlider.title,
-          eyebrow: data.eyebrow !== undefined ? data.eyebrow : existingSlider.eyebrow,
-          subtitle: data.subtitle !== undefined ? data.subtitle : existingSlider.subtitle,
-          alt: data.alt !== undefined ? data.alt : existingSlider.alt,
-          image: data.image !== undefined ? data.image : existingSlider.image,
-          href: data.href !== undefined ? data.href : existingSlider.href,
-          config: data.config !== undefined ? { ...existingSlider.config, ...data.config } : existingSlider.config,
-          sortOrder: data.sortOrder !== undefined ? data.sortOrder : existingSlider.sortOrder,
-          active: data.active !== undefined ? data.active : existingSlider.active,
-        },
-        select: {
-          id: true,
-          title: true,
-          eyebrow: true,
-          subtitle: true,
-          alt: true,
-          image: true,
-          href: true,
-          config: true,
-          sortOrder: true,
-          active: true,
-        },
+        data: mergeSliderUpdate(existingSlider, data) as any,
+        select: SLIDER_SELECT,
       });
     } catch (error: any) {
-      if (error.code === 'P2002') {
-        throw new BadRequestException('A slider with this sort order already exists');
-      }
-      throw error;
+      rethrowSliderError(error);
     }
   }
 

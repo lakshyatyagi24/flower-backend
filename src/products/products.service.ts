@@ -78,20 +78,9 @@ function slugify(input: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-function normalizeImageUrl(input?: string | null): string | null {
-  if (!input) return null;
-  let value = String(input).trim();
-  if (!value) return null;
-
-  // Inline base64 data URIs — the admin product form uploads images this way
-  // (reader.readAsDataURL). Pass them through untouched instead of nulling them.
-  if (/^data:image\//i.test(value)) return value;
-
-  // Site-relative paths (e.g. /images/x.jpg) are valid storefront images; keep them.
-  if (/^\/(?!\/)/.test(value)) return value;
-
-  value = value.replace(/\\\//g, '/');
-
+/** Decode up to two layers of percent-encoding; stops quietly on malformed sequences. */
+function decodeUrlLayers(input: string): string {
+  let value = input;
   for (let i = 0; i < 2; i += 1) {
     if (!/%[0-9A-Fa-f]{2}/.test(value)) break;
     try {
@@ -100,8 +89,11 @@ function normalizeImageUrl(input?: string | null): string | null {
       break;
     }
   }
+  return value;
+}
 
-  value = value
+function repairUrlScheme(input: string): string {
+  let value = input
     .replace(/^https::\/\//i, 'https://')
     .replace(/^http::\/\//i, 'http://')
     .replace(/^https:\/([^/])/i, 'https://$1')
@@ -110,19 +102,140 @@ function normalizeImageUrl(input?: string | null): string | null {
   if (value.startsWith('//')) value = `https:${value}`;
   if (/^cdn\.shopify\.com\//i.test(value)) value = `https://${value}`;
   if (/^http:\/\/cdn\.shopify\.com/i.test(value)) value = value.replace(/^http:\/\//i, 'https://');
-
-  // Upgrade bare-http remote hosts to https. The storefront renders images
-  // with next/image, which only whitelists http for localhost; a plain-http
-  // remote URL saves fine but crashes the storefront at render time.
-  if (
-    /^http:\/\//i.test(value) &&
-    !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(value)
-  ) {
-    value = value.replace(/^http:\/\//i, 'https://');
-  }
-
-  if (!/^https?:\/\//i.test(value)) return null;
   return value;
+}
+
+/**
+ * Upgrade bare-http remote hosts to https. The storefront renders images
+ * with next/image, which only whitelists http for localhost; a plain-http
+ * remote URL saves fine but crashes the storefront at render time.
+ */
+function upgradeRemoteHttp(value: string): string {
+  const isHttp = /^http:\/\//i.test(value);
+  const isLocal = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(value);
+  return isHttp && !isLocal ? value.replace(/^http:\/\//i, 'https://') : value;
+}
+
+function normalizeImageUrl(input?: string | null): string | null {
+  if (!input) return null;
+  const trimmed = String(input).trim();
+  if (!trimmed) return null;
+
+  // Inline base64 data URIs — the admin product form uploads images this way
+  // (reader.readAsDataURL). Pass them through untouched instead of nulling them.
+  if (/^data:image\//i.test(trimmed)) return trimmed;
+
+  // Site-relative paths (e.g. /images/x.jpg) are valid storefront images; keep them.
+  if (/^\/(?!\/)/.test(trimmed)) return trimmed;
+
+  const value = upgradeRemoteHttp(repairUrlScheme(decodeUrlLayers(trimmed.replace(/\\\//g, '/'))));
+  return /^https?:\/\//i.test(value) ? value : null;
+}
+
+/** Map known Prisma write errors to 400s; rethrow anything else. */
+function rethrowProductWriteError(e: any): never {
+  if (e?.code === 'P2002' && e.meta?.target?.includes?.('slug')) {
+    throw new BadRequestException('A product with this slug already exists');
+  }
+  if (e?.code === 'P2003') {
+    throw new BadRequestException('Selected category does not exist');
+  }
+  throw e;
+}
+
+function resolveSaleMode(input?: SaleModeValue): SaleModeValue {
+  return input && VALID_SALE_MODES.includes(input) ? input : 'PURCHASE';
+}
+
+function resolveProductType(input?: ProductTypeValue): ProductTypeValue {
+  return input && VALID_PRODUCT_TYPES.includes(input) ? input : 'CUT_FLOWER';
+}
+
+function resolveMinOrderQty(input?: number): number {
+  return input && input > 0 ? Math.floor(input) : 1;
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && value >= 0;
+}
+
+/** Build the Prisma `where` for a listing, ignoring unknown enum/tag values. */
+function buildListWhere(params: ListParams): Record<string, unknown> {
+  const where: Record<string, unknown> = {};
+  if (params.active !== undefined) where.active = params.active;
+  if (params.featured !== undefined) where.featured = params.featured;
+  if (params.category) where.category = { slug: params.category };
+  if (params.productType && VALID_PRODUCT_TYPES.includes(params.productType as ProductTypeValue)) {
+    where.productType = params.productType;
+  }
+  if (params.saleMode && VALID_SALE_MODES.includes(params.saleMode as SaleModeValue)) {
+    where.saleMode = params.saleMode;
+  }
+  if (typeof params.tag === 'string' && TAG_RE.test(params.tag) && params.tag.length <= TAG_MAX_LEN) {
+    where.tags = { has: params.tag };
+  }
+  if (params.q) {
+    where.OR = [
+      { name: { contains: params.q, mode: 'insensitive' } },
+      { description: { contains: params.q, mode: 'insensitive' } },
+    ];
+  }
+  return where;
+}
+
+/** Clamp take/page/skip. Bounded so a hostile ?page=1e20 / ?skip=1e20 can never reach Prisma as an absurd offset. */
+function resolvePaging(params: ListParams) {
+  const takeIn = Number.isFinite(params.take) ? Math.trunc(params.take as number) : 50;
+  const take = Math.min(Math.max(takeIn, 1), MAX_TAKE);
+  const pageGiven = typeof params.page === 'number' && Number.isInteger(params.page) && params.page >= 1;
+  const skipIn = Number.isFinite(params.skip) ? Math.trunc(params.skip as number) : 0;
+  const page = pageGiven ? Math.min(params.page as number, MAX_PAGE) : undefined;
+  const skip = page !== undefined ? (page - 1) * take : Math.min(Math.max(skipIn, 0), MAX_PAGE * MAX_TAKE);
+  const pageOut = page ?? Math.floor(skip / take) + 1;
+  return { take, skip, pageOut };
+}
+
+function resolveOrderBy(sort?: string) {
+  return Object.prototype.hasOwnProperty.call(SORT_ORDERS, sort ?? '') ? SORT_ORDERS[sort as string] : SORT_ORDERS.newest;
+}
+
+/** Field validators for update(): each returns the value to store, or throws 400. */
+const UPDATE_FIELD_MAPPERS: Record<string, (input: Partial<ProductInput>) => unknown> = {
+  name: (i) => i.name!.trim(),
+  slug: (i) => slugify(i.slug!),
+  description: (i) => i.description,
+  price: (i) => {
+    if (!isNonNegativeNumber(i.price)) throw new BadRequestException('Invalid price');
+    return i.price;
+  },
+  image: (i) => normalizeImageUrl(i.image),
+  stock: (i) => Math.max(0, Math.floor(i.stock!)),
+  featured: (i) => !!i.featured,
+  active: (i) => !!i.active,
+  categoryId: (i) => i.categoryId,
+  productType: (i) => {
+    if (!VALID_PRODUCT_TYPES.includes(i.productType!)) throw new BadRequestException('Invalid productType');
+    return i.productType;
+  },
+  saleMode: (i) => {
+    if (!VALID_SALE_MODES.includes(i.saleMode!)) throw new BadRequestException('Invalid saleMode');
+    return i.saleMode;
+  },
+  gstRate: (i) => {
+    if (!isNonNegativeNumber(i.gstRate)) throw new BadRequestException('Invalid gstRate');
+    return i.gstRate;
+  },
+  unit: (i) => i.unit?.trim() || 'piece',
+  minOrderQty: (i) => resolveMinOrderQty(i.minOrderQty),
+  tags: (i) => normalizeTags(i.tags),
+};
+
+function buildUpdateData(input: Partial<ProductInput>): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  for (const [field, map] of Object.entries(UPDATE_FIELD_MAPPERS)) {
+    if ((input as Record<string, unknown>)[field] !== undefined) data[field] = map(input);
+  }
+  return data;
 }
 
 @Injectable()
@@ -222,41 +335,9 @@ export class ProductsService {
   }
 
   async list(params: ListParams) {
-    const where: Record<string, unknown> = {};
-    if (params.active !== undefined) where.active = params.active;
-    if (params.featured !== undefined) where.featured = params.featured;
-    if (params.category) {
-      where.category = { slug: params.category };
-    }
-    if (params.productType && VALID_PRODUCT_TYPES.includes(params.productType as ProductTypeValue)) {
-      where.productType = params.productType;
-    }
-    if (params.saleMode && VALID_SALE_MODES.includes(params.saleMode as SaleModeValue)) {
-      where.saleMode = params.saleMode;
-    }
-    if (typeof params.tag === 'string' && TAG_RE.test(params.tag) && params.tag.length <= TAG_MAX_LEN) {
-      where.tags = { has: params.tag };
-    }
-    if (params.q) {
-      const q = params.q;
-      where.OR = [
-        { name: { contains: q, mode: 'insensitive' } },
-        { description: { contains: q, mode: 'insensitive' } },
-      ];
-    }
-    const takeIn = Number.isFinite(params.take) ? Math.trunc(params.take as number) : 50;
-    const take = Math.min(Math.max(takeIn, 1), MAX_TAKE);
-    const pageGiven =
-      typeof params.page === 'number' && Number.isInteger(params.page) && params.page >= 1;
-    const skipIn = Number.isFinite(params.skip) ? Math.trunc(params.skip as number) : 0;
-    // Bounded so a hostile ?page=1e20 / ?skip=1e20 can never reach Prisma as an
-    // absurd offset (that would 500 on a public route).
-    const page = pageGiven ? Math.min(params.page as number, MAX_PAGE) : undefined;
-    const skip = page !== undefined ? (page - 1) * take : Math.min(Math.max(skipIn, 0), MAX_PAGE * MAX_TAKE);
-    const pageOut = page ?? Math.floor(skip / take) + 1;
-    const orderBy = Object.prototype.hasOwnProperty.call(SORT_ORDERS, params.sort ?? '')
-      ? SORT_ORDERS[params.sort as string]
-      : SORT_ORDERS.newest;
+    const where = buildListWhere(params);
+    const { take, skip, pageOut } = resolvePaging(params);
+    const orderBy = resolveOrderBy(params.sort);
     const productPage = () =>
       this.prisma.product.findMany({ where, orderBy, select: this.select, take, skip });
     let rawItems: Awaited<ReturnType<typeof productPage>>;
@@ -288,14 +369,13 @@ export class ProductsService {
 
   async create(input: ProductInput) {
     if (!input.name?.trim()) throw new BadRequestException('Name is required');
-    const saleMode: SaleModeValue = input.saleMode && VALID_SALE_MODES.includes(input.saleMode) ? input.saleMode : 'PURCHASE';
-    if (saleMode === 'PURCHASE') {
-      if (typeof input.price !== 'number' || input.price < 0) throw new BadRequestException('Valid price is required for purchase products');
+    const saleMode = resolveSaleMode(input.saleMode);
+    if (saleMode === 'PURCHASE' && !isNonNegativeNumber(input.price)) {
+      throw new BadRequestException('Valid price is required for purchase products');
     }
     // Always slugify (same as update): an explicit slug with &, <, spaces or capitals must not reach URLs/sitemaps.
     const slug = slugify(input.slug ?? '') || slugify(input.name);
     if (!slug) throw new BadRequestException('Slug could not be derived');
-    const productType: ProductTypeValue = input.productType && VALID_PRODUCT_TYPES.includes(input.productType) ? input.productType : 'CUT_FLOWER';
     try {
       return await this.prisma.product.create({
         data: {
@@ -307,70 +387,29 @@ export class ProductsService {
           stock: input.stock ?? 0,
           featured: input.featured ?? false,
           active: input.active ?? true,
-          productType,
+          productType: resolveProductType(input.productType),
           saleMode,
-          gstRate: typeof input.gstRate === 'number' && input.gstRate >= 0 ? input.gstRate : 0,
+          gstRate: isNonNegativeNumber(input.gstRate) ? input.gstRate : 0,
           unit: input.unit?.trim() || 'piece',
-          minOrderQty: input.minOrderQty && input.minOrderQty > 0 ? Math.floor(input.minOrderQty) : 1,
+          minOrderQty: resolveMinOrderQty(input.minOrderQty),
           categoryId: input.categoryId ?? null,
           tags: input.tags === undefined ? [] : normalizeTags(input.tags),
         },
         select: this.select,
       });
     } catch (e: any) {
-      if (e?.code === 'P2002' && e.meta?.target?.includes?.('slug')) {
-        throw new BadRequestException('A product with this slug already exists');
-      }
-      if (e?.code === 'P2003') {
-        throw new BadRequestException('Selected category does not exist');
-      }
-      throw e;
+      rethrowProductWriteError(e);
     }
   }
 
   async update(id: number, input: Partial<ProductInput>) {
     const existing = await this.prisma.product.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Product not found');
-    const data: Record<string, unknown> = {};
-    if (input.name !== undefined) data.name = input.name.trim();
-    if (input.slug !== undefined) data.slug = slugify(input.slug);
-    if (input.description !== undefined) data.description = input.description;
-    if (input.price !== undefined) {
-      if (typeof input.price !== 'number' || input.price < 0) throw new BadRequestException('Invalid price');
-      data.price = input.price;
-    }
-    if (input.image !== undefined) data.image = normalizeImageUrl(input.image);
-    if (input.stock !== undefined) data.stock = Math.max(0, Math.floor(input.stock));
-    if (input.featured !== undefined) data.featured = !!input.featured;
-    if (input.active !== undefined) data.active = !!input.active;
-    if (input.categoryId !== undefined) data.categoryId = input.categoryId;
-    if (input.productType !== undefined) {
-      if (!VALID_PRODUCT_TYPES.includes(input.productType)) throw new BadRequestException('Invalid productType');
-      data.productType = input.productType;
-    }
-    if (input.saleMode !== undefined) {
-      if (!VALID_SALE_MODES.includes(input.saleMode)) throw new BadRequestException('Invalid saleMode');
-      data.saleMode = input.saleMode;
-    }
-    if (input.gstRate !== undefined) {
-      if (typeof input.gstRate !== 'number' || input.gstRate < 0) throw new BadRequestException('Invalid gstRate');
-      data.gstRate = input.gstRate;
-    }
-    if (input.unit !== undefined) data.unit = input.unit?.trim() || 'piece';
-    if (input.minOrderQty !== undefined) {
-      data.minOrderQty = input.minOrderQty && input.minOrderQty > 0 ? Math.floor(input.minOrderQty) : 1;
-    }
-    if (input.tags !== undefined) data.tags = normalizeTags(input.tags);
+    const data = buildUpdateData(input);
     try {
       return await this.prisma.product.update({ where: { id }, data, select: this.select });
     } catch (e: any) {
-      if (e?.code === 'P2002' && e.meta?.target?.includes?.('slug')) {
-        throw new BadRequestException('A product with this slug already exists');
-      }
-      if (e?.code === 'P2003') {
-        throw new BadRequestException('Selected category does not exist');
-      }
-      throw e;
+      rethrowProductWriteError(e);
     }
   }
 

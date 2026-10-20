@@ -20,6 +20,26 @@ interface ListParams {
   skip?: number;
 }
 
+function isValidRating(rating: unknown): boolean {
+  return typeof rating === 'number' && Number.isInteger(rating) && rating >= 1 && rating <= 5;
+}
+
+/** Trimmed, null-normalised review content used for change detection and writes. */
+function normalizeContent(input: UpsertReviewInput) {
+  return {
+    rating: input.rating,
+    title: input.title?.trim?.() || null,
+    body: input.body.trim(),
+  };
+}
+
+function sameContent(
+  existing: { rating: number; title: string | null; body: string },
+  data: { rating: number; title: string | null; body: string },
+): boolean {
+  return existing.rating === data.rating && existing.title === data.title && existing.body === data.body;
+}
+
 export const NOT_A_BUYER_MESSAGE = 'Only customers who received this product can review it';
 
 /**
@@ -66,12 +86,7 @@ export class ReviewsService {
   }
 
   private validate(input: UpsertReviewInput) {
-    if (
-      typeof input.rating !== 'number' ||
-      !Number.isInteger(input.rating) ||
-      input.rating < 1 ||
-      input.rating > 5
-    ) {
+    if (!isValidRating(input.rating)) {
       throw new BadRequestException('Rating must be an integer between 1 and 5');
     }
     const body = (input.body ?? '').trim();
@@ -148,18 +163,21 @@ export class ReviewsService {
     const now = Date.now();
     const last = this.lastNotified.get(userId);
     if (last !== undefined && now - last < ReviewsService.NOTIFY_COOLDOWN_MS) return false;
-    if (this.lastNotified.size >= ReviewsService.NOTIFY_MAP_MAX) {
-      for (const [k, t] of this.lastNotified) {
-        if (now - t >= ReviewsService.NOTIFY_COOLDOWN_MS) this.lastNotified.delete(k);
-      }
-      // Still full of recent entries: drop the oldest (Map keeps insertion order).
-      while (this.lastNotified.size >= ReviewsService.NOTIFY_MAP_MAX) {
-        this.lastNotified.delete(this.lastNotified.keys().next().value as number);
-      }
-    }
+    if (this.lastNotified.size >= ReviewsService.NOTIFY_MAP_MAX) this.makeNotifyRoom(now);
     this.lastNotified.delete(userId); // re-insert so insertion order tracks recency
     this.lastNotified.set(userId, now);
     return true;
+  }
+
+  /** Evict expired entries, then the oldest ones, until the map is below its cap. */
+  private makeNotifyRoom(now: number): void {
+    for (const [k, t] of this.lastNotified) {
+      if (now - t >= ReviewsService.NOTIFY_COOLDOWN_MS) this.lastNotified.delete(k);
+    }
+    // Still full of recent entries: drop the oldest (Map keeps insertion order).
+    while (this.lastNotified.size >= ReviewsService.NOTIFY_MAP_MAX) {
+      this.lastNotified.delete(this.lastNotified.keys().next().value as number);
+    }
   }
 
   /**
@@ -196,20 +214,11 @@ export class ReviewsService {
     if (!(await this.hasReceivedProduct(userId, productId))) {
       throw new ForbiddenException(NOT_A_BUYER_MESSAGE);
     }
-    const data = {
-      rating: input.rating,
-      title: input.title?.trim() || null,
-      body: input.body.trim(),
-    };
+    const data = normalizeContent(input);
     const existing = await this.prisma.review.findUnique({
       where: { productId_userId: { productId, userId } },
     });
-    if (
-      existing &&
-      existing.rating === data.rating &&
-      existing.title === data.title &&
-      existing.body === data.body
-    ) {
+    if (existing && sameContent(existing, data)) {
       // Re-submitting identical content keeps the current status (no free re-queue, no admin mail).
       return this.prisma.review.findUniqueOrThrow({ where: { id: existing.id }, select: this.select });
     }
@@ -241,13 +250,8 @@ export class ReviewsService {
       body: input.body ?? existing.body,
     };
     this.validate(next);
-    const data = {
-      rating: next.rating,
-      title: next.title?.trim?.() || null,
-      body: next.body.trim(),
-    };
-    const unchanged =
-      existing.rating === data.rating && existing.title === data.title && existing.body === data.body;
+    const data = normalizeContent(next);
+    const unchanged = sameContent(existing, data);
     // Author edits re-enter moderation; an admin correcting someone else's text does not change its status.
     const requeue = isAuthor && !unchanged;
     const saved = await this.prisma.review.update({

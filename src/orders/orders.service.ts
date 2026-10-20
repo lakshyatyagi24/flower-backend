@@ -9,7 +9,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import { normalizeIndianPhone } from '../common/validators';
 import { MailService } from '../mail/mail.service';
 import { isOnlinePaymentsEnabled } from '../payments/config';
-import { joinRefundNote, splitRefundNote } from './refund-note';
 import { SETTING_DEFAULTS } from '../settings/setting-defaults';
 import { DeliveryService } from '../delivery/delivery.service';
 import { istNow, toStoredDate } from '../delivery/delivery-date';
@@ -21,6 +20,18 @@ import {
 import { gstPerLine } from '../coupons/discount-tax';
 import { buildOrderSearchWhere, resolveDayRange, zeroFillSeries } from './orders-query';
 import { EXPORT_ROW_CAP, exportFilename, ordersToCsv, type ExportOrder } from './orders-csv';
+import {
+  ALLOWED_STATUSES,
+  assertTransition,
+  isOrderStatus,
+  MISMATCH_MARKER,
+  OrderStatus,
+  PAYMENT_METHODS,
+  PAYMENT_STATUSES,
+  POST_SWITCH_MARKER,
+} from './order-status';
+import { AdminOrderPatch, assertRefundEligible, buildAdminData, planRefundNoteWrite } from './order-admin-patch';
+import { buildOrderItems, OrderItemInput, OrderItemRow, ProductRow, TaxLine } from './order-items';
 
 export interface OrderListFilters {
   status?: string;
@@ -30,11 +41,6 @@ export interface OrderListFilters {
   sort?: string;
   /** Free-text admin search: order id, customer email / name / phone. */
   q?: string;
-}
-
-interface OrderItemInput {
-  productId: number;
-  quantity: number;
 }
 
 interface CreateOrderInput {
@@ -53,24 +59,18 @@ interface CreateOrderInput {
   couponCode?: string;
 }
 
-const ALLOWED_STATUSES = ['PENDING', 'PAID', 'SHIPPED', 'COMPLETED', 'CANCELLED'] as const;
-type OrderStatus = (typeof ALLOWED_STATUSES)[number];
-
-// Legal forward transitions. COMPLETED and CANCELLED are terminal. This keeps
-// the customer-facing tracking timeline coherent and lets cancellation restock
-// exactly once (you cannot resurrect a CANCELLED order and re-cancel it).
-const STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
-  PENDING: ['PAID', 'SHIPPED', 'CANCELLED'],
-  PAID: ['SHIPPED', 'COMPLETED', 'CANCELLED'],
-  SHIPPED: ['COMPLETED', 'CANCELLED'],
-  COMPLETED: [],
-  CANCELLED: [],
-};
-
-const PAYMENT_STATUSES = ['UNPAID', 'PAID', 'FAILED', 'REFUNDED'] as const;
-const PAYMENT_METHODS = ['COD', 'RAZORPAY'] as const;
-const MISMATCH_MARKER = 'AMOUNT MISMATCH';
-const POST_SWITCH_MARKER = 'CAPTURED AFTER SWITCH';
+/** Everything the order transaction needs, computed before it opens. */
+interface OrderDraft {
+  userId: number | null;
+  input: CreateOrderInput;
+  deliveryDate: string;
+  customerEmail: string;
+  couponInput: ReturnType<typeof normalizeCouponCode>;
+  subtotal: number;
+  shipping: number;
+  taxLines: TaxLine[];
+  itemRows: OrderItemRow[];
+}
 
 type AttentionKey = 'refund' | 'mismatch' | 'awaiting';
 
@@ -86,6 +86,40 @@ const ATTENTION_WHERE: Record<AttentionKey, Record<string, unknown>> = {
   // online order still waiting for its payment
   awaiting: { paymentMethod: 'RAZORPAY', paymentStatus: { in: ['UNPAID', 'FAILED'] }, status: 'PENDING' },
 };
+
+const ENUM_FILTERS = [
+  ['status', ALLOWED_STATUSES],
+  ['paymentStatus', PAYMENT_STATUSES],
+  ['paymentMethod', PAYMENT_METHODS],
+] as const;
+
+const NOT_SWITCHABLE_MESSAGE = 'Order can no longer be switched to cash on delivery';
+const fireAndForget = (p: Promise<unknown>) => void p.catch(() => undefined);
+
+/** An unpaid online order that has not captured any payment can still be switched to COD. */
+function isSwitchable(o: any): boolean {
+  return !!o && o.paymentMethod === 'RAZORPAY' && o.status === 'PENDING' &&
+    (o.paymentStatus === 'UNPAID' || o.paymentStatus === 'FAILED') && !o.razorpayPaymentId;
+}
+
+/** Already-COD is idempotent; anything else is a lost race or a non-switchable order. */
+function isLostSwitch(fresh: any): boolean {
+  return !fresh || fresh.paymentMethod !== 'COD' || fresh.status === 'CANCELLED' ||
+    fresh.paymentStatus === 'PAID' || !!fresh.razorpayPaymentId;
+}
+
+function switchToCodData(abandoned: string | null, existingNote: string | null): Record<string, unknown> {
+  const data: Record<string, unknown> = { paymentMethod: 'COD', razorpayOrderId: null, paymentStatus: 'UNPAID' };
+  if (abandoned) {
+    const marker = `Switched to COD; abandoned Razorpay order ${abandoned}`;
+    data.refundNote = existingNote ? `${existingNote}\n${marker}` : marker;
+  }
+  return data;
+}
+
+function emailMatches(stored: string | null | undefined, given: string): boolean {
+  return !!given && stored?.toLowerCase() === given.trim().toLowerCase();
+}
 
 @Injectable()
 export class OrdersService {
@@ -127,7 +161,14 @@ export class OrdersService {
     return isNaN(v) ? null : v;
   }
 
-  async create(userId: number | null, input: CreateOrderInput) {
+  private async computeShipping(subtotal: number): Promise<number> {
+    const flatRate = await this.loadShippingRate();
+    const freeThreshold = await this.loadFreeShippingThreshold();
+    return freeThreshold !== null && subtotal >= freeThreshold ? 0 : flatRate;
+  }
+
+  /** Cheap input gates; all run before any product/stock work or side effect. */
+  private async assertOrderable(input: CreateOrderInput): Promise<void> {
     // DTO covers shape; these catch whitespace-only values it cannot.
     if (!input.customerName.trim()) throw new BadRequestException('Customer name is required');
     if (!input.shippingAddress.trim()) throw new BadRequestException('Shipping address is required');
@@ -136,173 +177,160 @@ export class OrdersService {
       throw new BadRequestException('Online payments are currently unavailable. Please choose cash on delivery.');
     }
 
-    // Serviceability gate: runs before any product/stock work or side effect.
+    // Serviceability gate.
     if (!(await this.delivery.isServiceable((input.postalCode ?? '').trim()))) {
       throw new BadRequestException('We do not deliver to this PIN code yet');
     }
+  }
 
-    // Delivery-date gate (cut-off, lead time, window, blackout dates): also before any product/stock work.
-    const deliveryDate = await this.delivery.validateDeliveryDate(input.deliveryDate);
-
-    const productIds = input.items.map((i) => i.productId);
-    type ProductRow = {
-      id: number;
-      name: string;
-      price: number;
-      stock: number;
-      active: boolean;
-      saleMode: 'PURCHASE' | 'ENQUIRY';
-      gstRate: number;
-      minOrderQty: number;
-    };
+  private async loadProductMap(items: OrderItemInput[]): Promise<Map<number, ProductRow>> {
+    const productIds = items.map((i) => i.productId);
     const products: ProductRow[] = await this.prisma.product.findMany({
       where: { id: { in: productIds } },
     });
     if (products.length !== productIds.length) {
       throw new BadRequestException('One or more products are unavailable');
     }
-    const productMap = new Map<number, ProductRow>(products.map((p) => [p.id, p]));
+    return new Map<number, ProductRow>(products.map((p) => [p.id, p]));
+  }
 
-    let subtotal = 0;
-    const taxLines: Array<{ lineTotal: number; gstRate: number }> = [];
-    const itemRows = input.items.map((it) => {
-      const product = productMap.get(it.productId)!;
-      if (!product.active) throw new BadRequestException(`Product "${product.name}" is not available`);
-      if (product.saleMode === 'ENQUIRY') {
-        throw new BadRequestException(`"${product.name}" is enquiry-only — please send an enquiry instead`);
-      }
-      const qty = Math.floor(it.quantity || 1);
-      // Never silently bump the quantity (and the amount charged): the shopper must see the minimum.
-      const minQty = product.minOrderQty || 1;
-      if (qty < minQty) {
-        throw new BadRequestException(`"${product.name}" has a minimum order of ${minQty}`);
-      }
-      if (qty > product.stock) {
-        throw new BadRequestException(
-          product.stock <= 0
-            ? `"${product.name}" is out of stock`
-            : `Only ${product.stock} of "${product.name}" available`,
-        );
-      }
-      const lineTotal = product.price * qty;
-      const gstRate = product.gstRate || 0;
-      subtotal += lineTotal;
-      taxLines.push({ lineTotal, gstRate });
-      return {
-        productId: product.id,
-        productName: product.name,
-        quantity: qty,
-        unitPrice: product.price,
-        gstRate,
-        // Filled in inside the transaction, once the coupon discount (if any) is known.
-        gstAmount: 0,
-      };
+  /**
+   * For a logged-in buyer, bind the order's tracking email to their account
+   * email so ownership (userId) and the email-based tracking key cannot diverge.
+   */
+  private async resolveCustomerEmail(userId: number | null, given: string): Promise<string> {
+    const customerEmail = given.trim().toLowerCase();
+    if (!userId) return customerEmail;
+    const account = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
     });
+    return account?.email ? account.email.trim().toLowerCase() : customerEmail;
+  }
 
-    const flatRate = await this.loadShippingRate();
-    const freeThreshold = await this.loadFreeShippingThreshold();
-    const shipping = freeThreshold !== null && subtotal >= freeThreshold ? 0 : flatRate;
+  async create(userId: number | null, input: CreateOrderInput) {
+    await this.assertOrderable(input);
+
+    // Delivery-date gate (cut-off, lead time, window, blackout dates): also before any product/stock work.
+    const deliveryDate = await this.delivery.validateDeliveryDate(input.deliveryDate);
+
+    const productMap = await this.loadProductMap(input.items);
+    const { itemRows, taxLines, subtotal } = buildOrderItems(input.items, productMap);
+    const shipping = await this.computeShipping(subtotal);
     // R19: free shipping and the coupon minimum are both judged on the PRE-discount subtotal (above). The discount
     // comes off the item subtotal; GST is charged on the value AFTER the discount (spread over the lines in
     // proportion, see discount-tax.ts), so a discount also lowers the tax. Shipping is unaffected.
     const couponInput = normalizeCouponCode(input.couponCode);
+    const customerEmail = await this.resolveCustomerEmail(userId, input.customerEmail);
 
-    // For a logged-in buyer, bind the order's tracking email to their account
-    // email so ownership (userId) and the email-based tracking key cannot diverge.
-    let customerEmail = input.customerEmail.trim().toLowerCase();
-    if (userId) {
-      const account = await this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { email: true },
-      });
-      if (account?.email) customerEmail = account.email.trim().toLowerCase();
-    }
-
-    const created = await this.prisma.$transaction(async (tx) => {
-      // Coupon FIRST, inside the transaction and against the server-computed subtotal: any failure rolls the
-      // whole order back (stock claims below have not happened yet, or are undone with the rollback).
-      let discount = 0;
-      let couponCode: string | null = null;
-      if (couponInput) {
-        const coupon = await tx.coupon.findUnique({ where: { code: couponInput } });
-        discount = evaluateCoupon(coupon, subtotal);
-        const gstIfApplied = gstPerLine(taxLines, discount).reduce((a, b) => a + b, 0);
-        if (round2(subtotal - discount + shipping + gstIfApplied) < MIN_DISCOUNTED_TOTAL) throw belowMinimumTotalError();
-        // Atomic use claim: the guard is re-evaluated against the committed row, so of N concurrent orders
-        // racing for the last use exactly one gets count 1.
-        const claimed = await tx.coupon.updateMany({
-          where: {
-            id: coupon!.id,
-            active: true,
-            AND: [
-              { OR: [{ maxUses: null }, { usedCount: { lt: coupon!.maxUses ?? 0 } }] },
-              { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
-            ],
-          },
-          data: { usedCount: { increment: 1 } },
-        });
-        if (claimed.count === 0) {
-          // Lost the race (or the coupon changed after we read it): re-read it so the error names the real reason.
-          const fresh = await tx.coupon.findUnique({ where: { id: coupon!.id } });
-          evaluateCoupon(fresh, subtotal); // throws not found / expired / usage limit as appropriate
-          throw couponError('Coupon usage limit reached');
-        }
-        couponCode = coupon!.code;
-      }
-      const lineGst = gstPerLine(taxLines, discount);
-      const rows = itemRows.map((r, i) => ({ ...r, gstAmount: lineGst[i] }));
-      const gst = round2(lineGst.reduce((a, b) => a + b, 0));
-      const total = round2(subtotal - discount + shipping + gst);
-
-      // Atomically claim stock BEFORE creating the order. updateMany with a
-      // `stock >= qty` guard serializes concurrent buyers — if another order
-      // took the last units between our snapshot and now, count is 0 and we
-      // roll back instead of overselling into negative stock.
-      for (const it of itemRows) {
-        const claimed = await tx.product.updateMany({
-          where: { id: it.productId, stock: { gte: it.quantity } },
-          data: { stock: { decrement: it.quantity } },
-        });
-        if (claimed.count === 0) {
-          throw new BadRequestException(
-            `"${it.productName}" just went out of stock — please adjust your cart and try again`,
-          );
-        }
-      }
-
-      const order = await tx.order.create({
-        data: {
-          userId: userId ?? null,
-          subtotal,
-          shipping,
-          gst,
-          couponCode,
-          discount,
-          total,
-          status: 'PENDING',
-          paymentMethod: input.paymentMethod || 'COD',
-          customerName: input.customerName.trim(),
-          customerEmail,
-          customerPhone: normalizeIndianPhone(input.customerPhone ?? ''),
-          shippingAddress: input.shippingAddress.trim(),
-          city: input.city?.trim() || null,
-          postalCode: input.postalCode?.trim() || null,
-          notes: input.notes?.trim() || null,
-          deliveryDate: toStoredDate(deliveryDate),
-          items: { create: rows },
-        },
-        include: this.include,
-      });
-
-      return order;
-    });
+    const draft: OrderDraft = {
+      userId, input, deliveryDate, customerEmail, couponInput, subtotal, shipping, taxLines, itemRows,
+    };
+    const created = await this.prisma.$transaction((tx) => this.createInTransaction(tx, draft));
     // Fire-and-forget: mail must never fail or slow the request. Online-payment
     // orders are unpaid at creation, so they are announced on capture instead
     // (PaymentsService.markPaid -> sendOrderPaid).
     if ((input.paymentMethod || 'COD') !== 'RAZORPAY') {
-      void this.mail.sendOrderPlaced(created).catch(() => undefined);
+      fireAndForget(this.mail.sendOrderPlaced(created));
     }
     return this.forCustomer(created);
+  }
+
+  private async createInTransaction(tx: any, draft: OrderDraft) {
+    // Coupon FIRST, inside the transaction and against the server-computed subtotal: any failure rolls the
+    // whole order back (stock claims below have not happened yet, or are undone with the rollback).
+    const { discount, couponCode } = await this.applyCoupon(tx, draft);
+    const lineGst = gstPerLine(draft.taxLines, discount);
+    const rows = draft.itemRows.map((r, i) => ({ ...r, gstAmount: lineGst[i] }));
+    const gst = round2(lineGst.reduce((a, b) => a + b, 0));
+    const total = round2(draft.subtotal - discount + draft.shipping + gst);
+
+    await this.claimStock(tx, draft.itemRows);
+    return tx.order.create({
+      data: { ...this.buildOrderData(draft, { discount, couponCode, gst, total }), items: { create: rows } },
+      include: this.include,
+    });
+  }
+
+  private buildOrderData(
+    { userId, input, deliveryDate, customerEmail, subtotal, shipping }: OrderDraft,
+    totals: { discount: number; couponCode: string | null; gst: number; total: number },
+  ) {
+    return {
+      userId: userId ?? null,
+      subtotal,
+      shipping,
+      gst: totals.gst,
+      couponCode: totals.couponCode,
+      discount: totals.discount,
+      total: totals.total,
+      status: 'PENDING',
+      paymentMethod: input.paymentMethod || 'COD',
+      customerName: input.customerName.trim(),
+      customerEmail,
+      customerPhone: normalizeIndianPhone(input.customerPhone ?? ''),
+      shippingAddress: input.shippingAddress.trim(),
+      city: input.city?.trim() || null,
+      postalCode: input.postalCode?.trim() || null,
+      notes: input.notes?.trim() || null,
+      deliveryDate: toStoredDate(deliveryDate),
+    };
+  }
+
+  private async applyCoupon(
+    tx: any,
+    { couponInput, subtotal, shipping, taxLines }: OrderDraft,
+  ): Promise<{ discount: number; couponCode: string | null }> {
+    if (!couponInput) return { discount: 0, couponCode: null };
+    const coupon = await tx.coupon.findUnique({ where: { code: couponInput } });
+    const discount = evaluateCoupon(coupon, subtotal);
+    const gstIfApplied = gstPerLine(taxLines, discount).reduce((a, b) => a + b, 0);
+    if (round2(subtotal - discount + shipping + gstIfApplied) < MIN_DISCOUNTED_TOTAL) throw belowMinimumTotalError();
+    await this.claimCouponUse(tx, coupon, subtotal);
+    return { discount, couponCode: coupon!.code };
+  }
+
+  /**
+   * Atomic use claim: the guard is re-evaluated against the committed row, so of N concurrent orders
+   * racing for the last use exactly one gets count 1.
+   */
+  private async claimCouponUse(tx: any, coupon: any, subtotal: number): Promise<void> {
+    const claimed = await tx.coupon.updateMany({
+      where: {
+        id: coupon.id,
+        active: true,
+        AND: [
+          { OR: [{ maxUses: null }, { usedCount: { lt: coupon.maxUses ?? 0 } }] },
+          { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        ],
+      },
+      data: { usedCount: { increment: 1 } },
+    });
+    if (claimed.count !== 0) return;
+    // Lost the race (or the coupon changed after we read it): re-read it so the error names the real reason.
+    const fresh = await tx.coupon.findUnique({ where: { id: coupon.id } });
+    evaluateCoupon(fresh, subtotal); // throws not found / expired / usage limit as appropriate
+    throw couponError('Coupon usage limit reached');
+  }
+
+  /**
+   * Atomically claim stock BEFORE creating the order. updateMany with a
+   * `stock >= qty` guard serializes concurrent buyers — if another order
+   * took the last units between our snapshot and now, count is 0 and we
+   * roll back instead of overselling into negative stock.
+   */
+  private async claimStock(tx: any, itemRows: OrderItemRow[]): Promise<void> {
+    for (const it of itemRows) {
+      const claimed = await tx.product.updateMany({
+        where: { id: it.productId, stock: { gte: it.quantity } },
+        data: { stock: { decrement: it.quantity } },
+      });
+      if (claimed.count === 0) {
+        throw new BadRequestException(
+          `"${it.productName}" just went out of stock — please adjust your cart and try again`,
+        );
+      }
+    }
   }
 
   /**
@@ -328,22 +356,30 @@ export class OrdersService {
     const owns = canAccessOrder(order, { userId, email });
     if (!order || !owns) throw new ForbiddenException('Not your order');
 
-    // The CAS is bound to the razorpayOrderId and refundNote values we READ, so the marker we append
-    // names exactly the Razorpay order being abandoned. If createRazorpayOrder (or a webhook trace)
-    // changed either meanwhile, the CAS matches nothing; we re-read and retry (bounded), and if the
-    // order is no longer switchable the usual 409 logic below applies.
-    const switchable = (o: any) =>
-      !!o && o.paymentMethod === 'RAZORPAY' && o.status === 'PENDING' &&
-      (o.paymentStatus === 'UNPAID' || o.paymentStatus === 'FAILED') && !o.razorpayPaymentId;
-    let switched = { count: 0 };
+    const switched = await this.casSwitchToCod(orderId, order);
+
+    const fresh = await this.prisma.order.findUnique({ where: { id: orderId }, include: this.include });
+    if (switched) {
+      if (fresh) fireAndForget(this.mail.sendOrderPlaced(fresh));
+    } else if (isLostSwitch(fresh)) {
+      throw new ConflictException(NOT_SWITCHABLE_MESSAGE);
+    }
+    if (!fresh) throw new ConflictException(NOT_SWITCHABLE_MESSAGE);
+    return this.forCustomer(fresh);
+  }
+
+  /**
+   * The CAS is bound to the razorpayOrderId and refundNote values we READ, so the marker we append
+   * names exactly the Razorpay order being abandoned. If createRazorpayOrder (or a webhook trace)
+   * changed either meanwhile, the CAS matches nothing; we re-read and retry (bounded), and if the
+   * order is no longer switchable the caller's 409 logic applies. Returns true iff this call switched it.
+   */
+  private async casSwitchToCod(orderId: number, order: any): Promise<boolean> {
     let current: any = order;
-    for (let attempt = 0; attempt < 3 && switchable(current); attempt++) {
+    for (let attempt = 0; attempt < 3 && isSwitchable(current); attempt++) {
       const abandoned: string | null = current.razorpayOrderId ?? null;
       const existingNote: string | null = current.refundNote ?? null;
-      const marker = abandoned ? `Switched to COD; abandoned Razorpay order ${abandoned}` : null;
-      const data: Record<string, unknown> = { paymentMethod: 'COD', razorpayOrderId: null, paymentStatus: 'UNPAID' };
-      if (marker) data.refundNote = existingNote ? `${existingNote}\n${marker}` : marker;
-      switched = await this.prisma.order.updateMany({
+      const res = await this.prisma.order.updateMany({
         where: {
           id: orderId,
           paymentMethod: 'RAZORPAY',
@@ -353,21 +389,12 @@ export class OrdersService {
           razorpayOrderId: abandoned,
           refundNote: existingNote,
         },
-        data,
+        data: switchToCodData(abandoned, existingNote),
       });
-      if (switched.count === 1) break;
+      if (res.count === 1) return true;
       current = await this.prisma.order.findUnique({ where: { id: orderId } });
     }
-
-    const fresh = await this.prisma.order.findUnique({ where: { id: orderId }, include: this.include });
-    if (switched.count === 1) {
-      if (fresh) void this.mail.sendOrderPlaced(fresh).catch(() => undefined);
-    } else if (!fresh || fresh.paymentMethod !== 'COD' || fresh.status === 'CANCELLED' || fresh.paymentStatus === 'PAID' || fresh.razorpayPaymentId) {
-      // Already-COD is idempotent (below); anything else is a lost race or a non-switchable order.
-      throw new ConflictException('Order can no longer be switched to cash on delivery');
-    }
-    if (!fresh) throw new ConflictException('Order can no longer be switched to cash on delivery');
-    return this.forCustomer(fresh);
+    return false;
   }
 
   async listMine(userId: number) {
@@ -392,7 +419,7 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({ where: { id }, include: this.include });
     // Single generic error for both "no such order" and "email mismatch" so
     // sequential order IDs can't be enumerated via 404-vs-403 responses.
-    if (!order || !email || order.customerEmail?.toLowerCase() !== email.trim().toLowerCase()) {
+    if (!order || !emailMatches(order.customerEmail, email)) {
       throw new NotFoundException('Order not found, or the email does not match this order');
     }
     // Strip internal-only fields before returning to the public tracking endpoint.
@@ -407,27 +434,27 @@ export class OrdersService {
    */
   private buildListWhere(params: OrderListFilters): { where: Record<string, unknown>; upcoming: boolean } {
     const where: Record<string, unknown> = {};
-    if (params.status && (ALLOWED_STATUSES as readonly string[]).includes(params.status)) {
-      where.status = params.status;
+    for (const [key, allowed] of ENUM_FILTERS) {
+      const value = params[key];
+      if (value && (allowed as readonly string[]).includes(value)) where[key] = value;
     }
-    if (params.paymentStatus && (PAYMENT_STATUSES as readonly string[]).includes(params.paymentStatus)) {
-      where.paymentStatus = params.paymentStatus;
-    }
-    if (params.paymentMethod && (PAYMENT_METHODS as readonly string[]).includes(params.paymentMethod)) {
-      where.paymentMethod = params.paymentMethod;
-    }
-    const and: Record<string, unknown>[] = [];
-    if (params.attention && Object.prototype.hasOwnProperty.call(ATTENTION_WHERE, params.attention)) {
-      and.push(ATTENTION_WHERE[params.attention as AttentionKey]);
-    }
-    const search = buildOrderSearchWhere(params.q);
-    if (search) and.push(search);
+    const and = this.buildListAnd(params);
     if (and.length) where.AND = and;
     // "Upcoming deliveries": only orders due today (India date) or later, soonest first, so a long history of
     // past deliveries can never push upcoming ones out of the 200-row page.
     const upcoming = params.sort === 'deliveryDate';
     if (upcoming) where.deliveryDate = { gte: toStoredDate(istNow(new Date()).date) };
     return { where, upcoming };
+  }
+
+  private buildListAnd(params: OrderListFilters): Record<string, unknown>[] {
+    const and: Record<string, unknown>[] = [];
+    if (params.attention && Object.prototype.hasOwnProperty.call(ATTENTION_WHERE, params.attention)) {
+      and.push(ATTENTION_WHERE[params.attention as AttentionKey]);
+    }
+    const search = buildOrderSearchWhere(params.q);
+    if (search) and.push(search);
+    return and;
   }
 
   async listAll(params: OrderListFilters & { take?: number; skip?: number }) {
@@ -481,10 +508,7 @@ export class OrdersService {
   }
 
   private assertTransition(from: OrderStatus, to: OrderStatus) {
-    if (from === to) return;
-    if (!STATUS_TRANSITIONS[from].includes(to)) {
-      throw new BadRequestException(`Cannot change order status from ${from} to ${to}`);
-    }
+    assertTransition(from, to);
   }
 
   /**
@@ -505,28 +529,36 @@ export class OrdersService {
       data: { status: 'CANCELLED' },
     });
     if (flipped.count !== 1) return false;
-    // Coupon give-back (R19). Reached only by the call that performed the CANCELLED flip above, so it happens
-    // exactly once per order; the `usedCount > 0` guard keeps the counter from ever going negative.
+    await this.giveBackCoupon(tx, orderId);
+    await this.restockItems(tx, orderId);
+    return true;
+  }
+
+  /**
+   * Coupon give-back (R19). Reached only by the call that performed the CANCELLED flip, so it happens
+   * exactly once per order; the `usedCount > 0` guard keeps the counter from ever going negative.
+   */
+  private async giveBackCoupon(tx: any, orderId: number): Promise<void> {
     const couponRow = await tx.order.findUnique({ where: { id: orderId }, select: { couponCode: true } });
-    if (couponRow?.couponCode) {
-      await tx.coupon.updateMany({
-        where: { code: couponRow.couponCode, usedCount: { gt: 0 } },
-        data: { usedCount: { decrement: 1 } },
-      });
-    }
+    if (!couponRow?.couponCode) return;
+    await tx.coupon.updateMany({
+      where: { code: couponRow.couponCode, usedCount: { gt: 0 } },
+      data: { usedCount: { decrement: 1 } },
+    });
+  }
+
+  private async restockItems(tx: any, orderId: number): Promise<void> {
     const items = await tx.orderItem.findMany({
       where: { orderId },
       select: { productId: true, quantity: true },
     });
     for (const it of items) {
-      if (it.productId) {
-        await tx.product.update({
-          where: { id: it.productId },
-          data: { stock: { increment: it.quantity } },
-        });
-      }
+      if (!it.productId) continue;
+      await tx.product.update({
+        where: { id: it.productId },
+        data: { stock: { increment: it.quantity } },
+      });
     }
-    return true;
   }
 
   /**
@@ -539,9 +571,7 @@ export class OrdersService {
     const conflict = () => new ConflictException('Order was changed by someone else — reload and try again');
     if (to === 'CANCELLED') {
       if (!(await this.cancelAndRestock(tx, id, { status: from }))) throw conflict();
-      // Any non-status fields from the same patch.
-      const { status: _s, ...rest } = data; // eslint-disable-line @typescript-eslint/no-unused-vars
-      if (Object.keys(rest).length) await tx.order.update({ where: { id }, data: rest });
+      await this.writeNonStatusFields(tx, id, data);
     } else {
       const res = await tx.order.updateMany({ where: { id, status: from }, data });
       if (res.count !== 1) throw conflict();
@@ -549,19 +579,23 @@ export class OrdersService {
     return tx.order.findUnique({ where: { id }, include: this.include });
   }
 
+  /** Any non-status fields from the same patch as a cancellation. */
+  private async writeNonStatusFields(tx: any, id: number, data: Record<string, unknown>): Promise<void> {
+    const { status: _s, ...rest } = data; // eslint-disable-line @typescript-eslint/no-unused-vars
+    if (Object.keys(rest).length) await tx.order.update({ where: { id }, data: rest });
+  }
+
   async updateStatus(id: number, status: string) {
-    if (!(ALLOWED_STATUSES as readonly string[]).includes(status)) {
-      throw new BadRequestException('Invalid status');
-    }
+    if (!isOrderStatus(status)) throw new BadRequestException('Invalid status');
     const existing = await this.prisma.order.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Order not found');
     const from = existing.status as OrderStatus;
-    const to = status as OrderStatus;
+    const to = status;
     if (from === to) return this.getOne(id);
     this.assertTransition(from, to);
 
     const updated = await this.prisma.$transaction((tx) => this.transition(tx, id, from, to, { status: to }));
-    if (to === 'SHIPPED') void this.mail.sendOrderShipped(updated).catch(() => undefined);
+    if (to === 'SHIPPED') fireAndForget(this.mail.sendOrderShipped(updated));
     return updated;
   }
 
@@ -569,97 +603,78 @@ export class OrdersService {
    * Generic admin-only update for fulfillment fields. Each field is optional so
    * admins can edit a tracking number without re-supplying everything else.
    */
-  async adminUpdate(
-    id: number,
-    patch: {
-      status?: string;
-      trackingNumber?: string | null;
-      courierName?: string | null;
-      adminNotes?: string | null;
-      shippingAddress?: string | null;
-      city?: string | null;
-      postalCode?: string | null;
-      customerPhone?: string | null;
-      paymentStatus?: 'REFUNDED';
-      refundNote?: string | null;
-    },
-  ) {
+  async adminUpdate(id: number, patch: AdminOrderPatch) {
     const existing = await this.prisma.order.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Order not found');
 
-    const data: Record<string, unknown> = {};
-    const fromStatus = existing.status as OrderStatus;
-    if (patch.status !== undefined) {
-      if (!(ALLOWED_STATUSES as readonly string[]).includes(patch.status)) {
-        throw new BadRequestException('Invalid status');
-      }
-      const from = existing.status as OrderStatus;
-      const to = patch.status as OrderStatus;
-      // Only treat it as a transition when the status actually changes, so an
-      // admin can edit tracking/notes without re-validating an unchanged status.
-      if (from !== to) {
-        this.assertTransition(from, to);
-        data.status = to;
-      }
-    }
-    if (patch.trackingNumber !== undefined) data.trackingNumber = patch.trackingNumber || null;
-    if (patch.courierName !== undefined) data.courierName = patch.courierName || null;
-    if (patch.adminNotes !== undefined) data.adminNotes = patch.adminNotes || null;
-    if (patch.shippingAddress !== undefined) data.shippingAddress = patch.shippingAddress || null;
-    if (patch.city !== undefined) data.city = patch.city || null;
-    if (patch.postalCode !== undefined) data.postalCode = patch.postalCode || null;
-    if (patch.customerPhone !== undefined) data.customerPhone = patch.customerPhone || null;
-    if (patch.paymentStatus !== undefined && patch.paymentStatus !== 'REFUNDED') {
-      throw new BadRequestException('Invalid payment status');
-    }
+    const data = buildAdminData(patch, existing.status);
     const markRefunded = patch.paymentStatus === 'REFUNDED';
-
-    // Admin text replaces only the ADMIN part of refundNote; system trace lines are always preserved
-    // (and system-looking lines in the submitted text are stripped, so they cannot be forged/duplicated).
     const readNote: string | null = existing.refundNote ?? null;
-    let newNote: string | null | undefined;
-    if (patch.refundNote !== undefined) {
-      newNote = joinRefundNote(splitRefundNote(patch.refundNote).admin, splitRefundNote(readNote).system);
-    }
-    const writeNote = newNote !== undefined && newNote !== readNote;
-
-    if (markRefunded) {
-      // PAID, or UNPAID with our own trace that money was captured (post-COD-switch capture / mismatch).
-      const traced = readNote !== null && (readNote.includes(POST_SWITCH_MARKER) || readNote.includes(MISMATCH_MARKER));
-      const eligible = existing.paymentStatus === 'PAID' || (existing.paymentStatus === 'UNPAID' && traced);
-      if (!eligible) throw new ConflictException('Only a paid order can be marked refunded');
-    }
+    const { writeNote, newNote } = planRefundNoteWrite(patch.refundNote, readNote);
+    if (markRefunded) assertRefundEligible(existing.paymentStatus, readNote);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       if (markRefunded || writeNote) {
-        // Compare-and-set on the paymentStatus and note we read: a webhook trace appended meanwhile makes
-        // this match nothing, so it can never be silently overwritten. Never touches status/stock/mail.
-        const cas: Record<string, unknown> = { id, refundNote: readNote };
-        if (markRefunded) cas.paymentStatus = existing.paymentStatus;
-        const casData: Record<string, unknown> = {};
-        if (markRefunded) casData.paymentStatus = 'REFUNDED';
-        if (writeNote) casData.refundNote = newNote;
-        const res = await tx.order.updateMany({ where: cas, data: casData });
-        if (res.count !== 1) {
-          const now = await tx.order.findUnique({ where: { id } });
-          if (markRefunded && now && now.paymentStatus !== existing.paymentStatus) {
-            throw new ConflictException('Only a paid order can be marked refunded');
-          }
-          throw new ConflictException('The note was changed meanwhile - reload and try again');
-        }
+        await this.casRefundFields(tx, existing, readNote, markRefunded, writeNote ? { note: newNote } : null);
       }
-      if (data.status !== undefined) return this.transition(tx, id, fromStatus, data.status as OrderStatus, data);
+      if (data.status !== undefined) {
+        return this.transition(tx, id, existing.status as OrderStatus, data.status as OrderStatus, data);
+      }
       // No status change: plain field edits stay unguarded.
       return tx.order.update({ where: { id }, data, include: this.include });
     });
     // data.status is only set when the status actually changed.
-    if (data.status === 'SHIPPED') void this.mail.sendOrderShipped(updated).catch(() => undefined);
+    if (data.status === 'SHIPPED') fireAndForget(this.mail.sendOrderShipped(updated));
     return updated;
+  }
+
+  /**
+   * Compare-and-set on the paymentStatus and note we read: a webhook trace appended meanwhile makes
+   * this match nothing, so it can never be silently overwritten. Never touches status/stock/mail.
+   */
+  private async casRefundFields(
+    tx: any,
+    existing: { id: number; paymentStatus: string },
+    readNote: string | null,
+    markRefunded: boolean,
+    noteWrite: { note: string | null | undefined } | null,
+  ): Promise<void> {
+    const cas: Record<string, unknown> = { id: existing.id, refundNote: readNote };
+    if (markRefunded) cas.paymentStatus = existing.paymentStatus;
+    const casData: Record<string, unknown> = {};
+    if (markRefunded) casData.paymentStatus = 'REFUNDED';
+    if (noteWrite) casData.refundNote = noteWrite.note;
+    const res = await tx.order.updateMany({ where: cas, data: casData });
+    if (res.count === 1) return;
+    const now = await tx.order.findUnique({ where: { id: existing.id } });
+    if (markRefunded && now && now.paymentStatus !== existing.paymentStatus) {
+      throw new ConflictException('Only a paid order can be marked refunded');
+    }
+    throw new ConflictException('The note was changed meanwhile - reload and try again');
   }
 
   async stats(range?: { from?: unknown; to?: unknown }, now: Date = new Date()) {
     const dayRange = resolveDayRange(range?.from, range?.to, now);
-    const [orderCount, productCount, customerCount, totalAgg, recentOrders, openEnquiries, unpaidOnline, refundsDue, mismatches, seriesRows] = await Promise.all([
+    // Both groups start before either is awaited, so all queries still run concurrently.
+    const [totals, attention] = await Promise.all([
+      this.statsTotals(),
+      this.statsAttention(dayRange.fromUtc, dayRange.toUtcExclusive),
+    ]);
+    return {
+      ...totals.counts,
+      revenue: totals.revenue,
+      recentOrders: totals.recentOrders,
+      openEnquiries: attention.openEnquiries,
+      unpaidOnline: attention.unpaidOnline,
+      refundsDue: attention.refundsDue,
+      mismatches: attention.mismatches,
+      range: { from: dayRange.from, to: dayRange.to },
+      series: zeroFillSeries(dayRange.days, attention.seriesRows, round2),
+    };
+  }
+
+  private async statsTotals() {
+    const [orderCount, productCount, customerCount, totalAgg, recentOrders] = await Promise.all([
       this.prisma.order.count(),
       this.prisma.product.count(),
       this.prisma.user.count({ where: { role: 'CUSTOMER' } }),
@@ -675,33 +690,25 @@ export class OrdersService {
       this.prisma.order.findMany({
         orderBy: { createdAt: 'desc' },
         take: 5,
-        select: {
-          id: true,
-          customerName: true,
-          total: true,
-          status: true,
-          createdAt: true,
-        },
+        select: { id: true, customerName: true, total: true, status: true, createdAt: true },
       }),
+    ]);
+    return {
+      counts: { orderCount, productCount, customerCount },
+      revenue: totalAgg._sum.total ?? 0,
+      recentOrders,
+    };
+  }
+
+  private async statsAttention(fromUtc: Date, toUtcExclusive: Date) {
+    const [openEnquiries, unpaidOnline, refundsDue, mismatches, seriesRows] = await Promise.all([
       this.prisma.enquiry.count({ where: { status: { in: ['NEW', 'CONTACTED', 'QUOTED'] } } }),
       this.prisma.order.count({ where: ATTENTION_WHERE.awaiting }),
       this.prisma.order.count({ where: ATTENTION_WHERE.refund }),
       this.prisma.order.count({ where: ATTENTION_WHERE.mismatch }),
-      this.dailySeriesRows(dayRange.fromUtc, dayRange.toUtcExclusive),
+      this.dailySeriesRows(fromUtc, toUtcExclusive),
     ]);
-    return {
-      orderCount,
-      productCount,
-      customerCount,
-      revenue: totalAgg._sum.total ?? 0,
-      recentOrders,
-      openEnquiries,
-      unpaidOnline,
-      refundsDue,
-      mismatches,
-      range: { from: dayRange.from, to: dayRange.to },
-      series: zeroFillSeries(dayRange.days, seriesRows, round2),
-    };
+    return { openEnquiries, unpaidOnline, refundsDue, mismatches, seriesRows };
   }
 
   /**
